@@ -30,6 +30,41 @@ _ruamel.width = 4096
 _ruamel.allow_unicode = True       # 中文/emoji 直接写，不转义为 \xXX
 
 
+# ── 硬编码默认值（最低优先级）──────────────────────────────────────────────────
+# 即使 config.yaml 完全没有 _default_user 段，新建用户也能拿到完整 sources/prompt。
+# yaml 的 _default_user 段如有则覆盖此处；用户级配置最终覆盖前两者。
+# 注意 wechat.proxy 故意留空，因为代理凭证是部署相关的，不能硬编码。
+
+_HARDCODED_DEFAULTS = {
+    'wechat': {
+        'proxy':      '',
+        'author':     '',
+        'sources': {
+            'platforms':  ['youtube', 'facebook', 'instagram'],
+            'categories': ['学校官方'],
+        },
+        'prompt':            'wechat_article',
+        'rewrite_mode':      'batch',
+        'rewrite_batch':     10,
+        'articles_per_batch': 2,
+        'rewrite_cron':      '0 8 * * *',
+        'push_cron':         '',
+    },
+    'xhs': {
+        'sources': {
+            'platforms':  ['xiaohongshu', 'douyin'],
+            'categories': ['泰国留学', '低分留学'],
+        },
+        'prompt':            'xhs_note',
+        'rewrite_mode':      'per_post',
+        'rewrite_batch':     2,
+        'articles_per_batch': 0,
+        'rewrite_cron':      '0 13 * * *',
+        'push_cron':         '',
+    },
+}
+
+
 # ── 加载 ─────────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
@@ -74,15 +109,20 @@ def _materialize_user(raw: dict, defaults: dict) -> dict:
     return merged
 
 
+def _resolved_defaults(config: dict) -> dict:
+    """硬编码默认值 ⊕ yaml._default_user 覆盖（深度合并）。"""
+    return _deep_merge(_HARDCODED_DEFAULTS, config.get('_default_user') or {})
+
+
 def get_user(config: dict, user_id: str) -> Optional[dict]:
     raw = next((u for u in (config.get('users') or []) if u.get('id') == user_id), None)
     if not raw:
         return None
-    return _materialize_user(raw, config.get('_default_user') or {})
+    return _materialize_user(raw, _resolved_defaults(config))
 
 
 def list_users(config: dict) -> list[dict]:
-    defaults = config.get('_default_user') or {}
+    defaults = _resolved_defaults(config)
     return [_materialize_user(u, defaults) for u in (config.get('users') or [])]
 
 
