@@ -682,6 +682,41 @@ image_gen:
 - alice/bob.xhs.rewrite_batch: 5/3 → **2**
 - bob.wechat.articles_per_batch: 1 → **2**（alice 已是 2）
 
+### 2026-05-09 — 部署到 newmedia 服务器
+
+**位置**：`/data/publisher-hub/`（与 newmedia 共享同一台 47.236.168.208）
+
+**步骤**：
+1. `curl -LsSf https://astral.sh/uv/install.sh | sh` 装 uv（自动管理 Python 3.11）
+2. `git clone https://github.com/someonelikeyoujiyue/publish.git /data/publisher-hub`
+3. `cd /data/publisher-hub && uv venv && uv pip install -e .`
+4. SCP 本地 `config.yaml` 到服务器，sed 改两个值：
+   - `mysql.host`: `47.236.168.208` → `127.0.0.1`（服务器本地连库快）
+   - `image_gen.proxy`: `socks5h://...` → `""`（服务器路径无 valueclue 16.8s 限制）
+   - 其他不动（wechat.proxy 仍要 SOCKS5 走 IP 白名单；image_server_url 保持公网）
+5. systemd 服务 `/etc/systemd/system/publisher-hub.service`：
+```ini
+[Service]
+WorkingDirectory=/data/publisher-hub
+ExecStart=/data/publisher-hub/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8900
+Restart=always
+After=network.target newmedia-web.service
+```
+6. `systemctl daemon-reload && enable && start`
+
+**自动判别本地写图**：
+`image_gen.py._is_running_on_server()` 用 socket 解析 `mysql.host`（即 server_host），
+匹配本机 IP 时跳过 scp 直接 `shutil.copy()` → 写 `/data/assets/hub-generated/<draft_id>.jpg`。
+本地开发仍走 scp。
+
+**端口分配**（最终）：
+- `:8899` → newmedia-web（统计 + /img/cover/attach/rsu/hub-gen 静态托管）
+- `:8900` → publisher-hub（多用户工作台）
+
+**访问**：http://47.236.168.208:8900/
+**日志**：`journalctl -u publisher-hub -f`
+**重启**：`systemctl restart publisher-hub`
+
 ### 2026-05-07 — 失败状态可重试
 
 **问题**：推送失败 `mark_failed` 后，模板里 `{% if d.status == 'ready' %}` 不再显示按钮，
