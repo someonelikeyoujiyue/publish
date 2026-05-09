@@ -64,81 +64,37 @@ image_gen:
   timeout_seconds: 180
 
 
-# ── 6. 用户池 ──────────────────────────────────────────────────────────────────
-# 每个用户拥有独立的：公众号 / 小红书 / 抓取条件 / cron
-# user.id 用作 URL 路径（/{user_id}/wechat），保持英文小写
+# ── 6. 用户默认值（新建用户继承；用户段同名字段覆盖）───────────────────────────
+_default_user:
+  wechat:
+    proxy:      "<SOCKS5_URL_FOR_WECHAT_API_WHITELIST>"
+    author:     ""
+    sources:
+      platforms:  [youtube, facebook, instagram]
+      categories: ["学校官方"]
+    prompt:        "wechat_article"
+    rewrite_mode:  "batch"
+    rewrite_batch: 10
+    articles_per_batch: 2
+    rewrite_cron: "0 8 * * *"
+    push_cron:    ""
+  xhs:
+    sources:
+      platforms:  [xiaohongshu, douyin]
+      categories: ["泰国留学", "低分留学"]
+    prompt:        "xhs_note"
+    rewrite_mode:  "per_post"
+    rewrite_batch: 2
+    articles_per_batch: 0
+    rewrite_cron: "0 13 * * *"
+    push_cron:    ""
 
+
+# ── 7. 用户池（前端 "+ 新增用户" 自动维护此段）─────────────────────────────────
 users:
 
   - id: alice
     name: "示例运营 A"
-
     wechat:
       app_id:     "<WECHAT_APP_ID>"
       app_secret: "<WECHAT_APP_SECRET>"
-      proxy:      "<SOCKS5_URL_FOR_WECHAT_API_WHITELIST>"
-      author:     ""
-
-      sources:
-        platforms:  [youtube, facebook, instagram]
-        categories: ["学校官方"]
-
-      prompt:        "wechat_article"
-      rewrite_mode:  "batch"
-      rewrite_batch: 10
-      articles_per_batch: 2
-
-      rewrite_cron: "0 8 * * *"
-      push_cron:    ""
-
-    xhs:
-      display_name: "Alice 的小红书"
-
-      sources:
-        platforms:  [xiaohongshu, douyin]
-        categories: ["泰国留学", "低分留学"]
-
-      prompt:        "xhs_note"
-      rewrite_mode:  "per_post"
-      rewrite_batch: 2
-      articles_per_batch: 0
-
-      rewrite_cron: "0 13 * * *"
-      push_cron:    ""
-
-
-  - id: bob
-    name: "示例运营 B"
-
-    wechat:
-      app_id:     "<WECHAT_APP_ID>"
-      app_secret: "<WECHAT_APP_SECRET>"
-      proxy:      "<SOCKS5_URL_FOR_WECHAT_API_WHITELIST>"
-      author:     ""
-
-      sources:
-        platforms:  [youtube, facebook]
-        categories: ["学校官方"]
-
-      prompt:        "wechat_article"
-      rewrite_mode:  "batch"
-      rewrite_batch: 10
-      articles_per_batch: 2
-
-      rewrite_cron: "30 9 * * *"
-      push_cron:    ""
-
-    xhs:
-      display_name: "Bob 的小红书"
-
-      sources:
-        platforms:  [xiaohongshu]
-        categories: ["单招", "艺考"]
-
-      prompt:        "xhs_note"
-      rewrite_mode:  "per_post"
-      rewrite_batch: 2
-      articles_per_batch: 0
-
-      rewrite_cron: "0 14 * * *"
-      push_cron:    ""

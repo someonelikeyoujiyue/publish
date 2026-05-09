@@ -3,18 +3,46 @@
 
 {% block content %}
 <div class="toolbar">
-  <h2>所有运营人员</h2>
-  <span style="color: var(--text-mid); font-size: 13px;">
-    共 {{ users|length }} 人 · 点击进入个人工作台
-  </span>
+  <div>
+    <h2>所有运营人员</h2>
+    <span style="color: var(--text-mid); font-size: 13px;">
+      共 {{ users|length }} 人 · 点击进入个人工作台
+    </span>
+  </div>
+  <div class="toolbar-actions">
+    <button class="btn btn-primary"
+            hx-get="/users/new"
+            hx-target="#modal-area"
+            hx-swap="innerHTML">
+      + 新增用户
+    </button>
+  </div>
 </div>
 
 {% if users %}
 <div class="user-grid">
   {% for u in users %}
   <div class="user-card">
-    <div class="user-card-name">{{ u.name }}</div>
-    <div class="user-card-id">@{{ u.id }}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;
+                gap:8px;margin-bottom:6px;">
+      <div>
+        <div class="user-card-name">{{ u.name }}</div>
+        <div class="user-card-id">@{{ u.id }}</div>
+      </div>
+      <div style="display:flex;gap:4px;">
+        <button class="btn btn-ghost"
+                hx-get="/{{ u.id }}/edit"
+                hx-target="#modal-area"
+                hx-swap="innerHTML"
+                title="编辑"
+                style="padding:4px 8px;font-size:13px;">✏️</button>
+        <button class="btn btn-ghost"
+                hx-post="/users/{{ u.id }}/delete"
+                hx-confirm="确认删除用户「{{ u.name }}」？(historical drafts 不会删除，可后续重建同 ID 用户恢复)"
+                title="删除"
+                style="padding:4px 8px;font-size:13px;color:#dc2626;">🗑</button>
+      </div>
+    </div>
 
     <div class="user-card-stats">
       <div class="user-stat">
@@ -38,7 +66,11 @@
 <div class="empty">
   <div class="empty-icon">👥</div>
   <div class="empty-text">还没有配置用户</div>
-  <div style="font-size: 13px;">编辑 <code>config.yaml</code> 的 <code>users:</code> 段</div>
+  <div style="font-size: 13px;">点上方「+ 新增用户」开始</div>
 </div>
 {% endif %}
+
+{# HTMX modal 容器 #}
+<div id="modal-area"></div>
+
 {% endblock %}

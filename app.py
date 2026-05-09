@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from publisher_hub.config import load_config, load_prompts
 from publisher_hub.db import Database
-from publisher_hub.routes import home, wechat, xhs
+from publisher_hub.routes import home, users, wechat, xhs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title='Publisher Hub', lifespan=lifespan)
 
+app.include_router(users.router)        # 必须先于 home.router（/{user_id} 通配会吞 /users）
 app.include_router(home.router)
 app.include_router(wechat.router)
 app.include_router(xhs.router)

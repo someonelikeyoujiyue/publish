@@ -1,0 +1,107 @@
+{% set is_new = (mode == 'new') %}
+{% set submit_url = '/users' if is_new else '/users/' + user.id %}
+
+<div class="modal-mask"
+     onclick="document.getElementById('modal-area').innerHTML=''"
+     style="position:fixed;inset:0;background:rgba(15,23,42,0.55);
+            display:flex;align-items:center;justify-content:center;z-index:1000;">
+
+  <div onclick="event.stopPropagation()"
+       style="background:#fff;border-radius:10px;padding:28px 30px;
+              max-width:520px;width:90%;max-height:90vh;overflow:auto;
+              box-shadow:0 12px 40px rgba(0,0,0,0.2);">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                margin-bottom:18px;">
+      <h2 style="margin:0;font-size:18px;font-weight:700;color:#0f766e;">
+        {{ '+ 新增用户' if is_new else '✏️ 编辑用户：' + user.id }}
+      </h2>
+      <button type="button" onclick="document.getElementById('modal-area').innerHTML=''"
+              style="background:transparent;border:none;font-size:22px;
+                     cursor:pointer;color:#94a3b8;line-height:1;">×</button>
+    </div>
+
+    <div style="padding:12px 16px;background:#fef3c7;border-left:4px solid #d97706;
+                border-radius:4px;font-size:13px;color:#78350f;line-height:1.6;
+                margin-bottom:18px;">
+      ⚠️ 提交前请先在公众号后台「<b>设置与开发 → 基本配置 → IP 白名单</b>」<br>
+      添加：<code style="background:#fef9c3;padding:1px 6px;border-radius:3px;
+                          font-weight:700;">47.236.168.208</code><br>
+      否则推送会报 <code>errcode 40164</code>
+    </div>
+
+    {% if error %}
+    <div style="padding:10px 14px;background:#fee2e2;color:#991b1b;
+                border-left:4px solid #dc2626;border-radius:4px;
+                font-size:13px;margin-bottom:14px;">
+      ✗ {{ error }}
+    </div>
+    {% endif %}
+
+    <form hx-post="{{ submit_url }}"
+          hx-target="#modal-area"
+          hx-swap="innerHTML"
+          hx-disabled-elt="find button[type=submit]">
+
+      <label style="display:block;margin-bottom:14px;">
+        <span style="display:block;font-size:13px;font-weight:600;color:#1e293b;
+                     margin-bottom:6px;">用户 ID
+          <span style="color:#94a3b8;font-weight:normal;">（英文小写，URL 路径用）</span>
+        </span>
+        <input name="user_id" required
+               value="{{ user.id if user else '' }}"
+               {% if not is_new %}readonly disabled{% endif %}
+               pattern="[a-z0-9_-]{1,32}"
+               style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;
+                      border-radius:6px;font-size:14px;font-family:monospace;
+                      {% if not is_new %}background:#f1f5f9;color:#64748b;{% endif %}">
+      </label>
+
+      <label style="display:block;margin-bottom:14px;">
+        <span style="display:block;font-size:13px;font-weight:600;color:#1e293b;
+                     margin-bottom:6px;">显示名
+          <span style="color:#94a3b8;font-weight:normal;">（中文，前端展示）</span>
+        </span>
+        <input name="name" required
+               value="{{ user.name if user else '' }}"
+               style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;
+                      border-radius:6px;font-size:14px;">
+      </label>
+
+      <label style="display:block;margin-bottom:14px;">
+        <span style="display:block;font-size:13px;font-weight:600;color:#1e293b;
+                     margin-bottom:6px;">公众号 app_id</span>
+        <input name="wechat_app_id" {% if is_new %}required{% endif %}
+               value="{{ user.wechat.app_id if user and user.wechat else '' }}"
+               placeholder="wxXXXXXXXXXXXXXXXX"
+               style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;
+                      border-radius:6px;font-size:14px;font-family:monospace;">
+      </label>
+
+      <label style="display:block;margin-bottom:18px;">
+        <span style="display:block;font-size:13px;font-weight:600;color:#1e293b;
+                     margin-bottom:6px;">公众号 app_secret
+          {% if not is_new %}
+          <span style="color:#94a3b8;font-weight:normal;">（留空保持不变）</span>
+          {% endif %}
+        </span>
+        <input name="wechat_app_secret" type="password"
+               {% if is_new %}required{% endif %}
+               placeholder="{{ '32 位 secret' if is_new else '留空保持不变' }}"
+               style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;
+                      border-radius:6px;font-size:14px;font-family:monospace;">
+      </label>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;
+                  padding-top:14px;border-top:1px solid #e2e8f0;">
+        <button type="button"
+                onclick="document.getElementById('modal-area').innerHTML=''"
+                class="btn btn-secondary">取消</button>
+        <button type="submit" class="btn btn-primary">
+          <span class="btn-text">{{ '✓ 创建' if is_new else '✓ 保存' }}</span>
+          <span class="btn-loading"><span class="spinner"></span> 保存中…</span>
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
