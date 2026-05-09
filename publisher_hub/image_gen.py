@@ -15,6 +15,8 @@ from __future__ import annotations
 import io
 import logging
 import random
+import shutil
+import socket
 import subprocess
 import uuid
 from pathlib import Path
@@ -97,29 +99,37 @@ class ImageGenerator:
         return self._post_process(urls[0], draft_id=draft_id)
 
     def _post_process(self, oss_url: str, draft_id: int | str = '') -> Optional[str]:
-        """下载 OSS 图 → 加噪声 → SCP 上传 → 返回永久 URL。失败返回原 OSS URL。"""
+        """下载 OSS 图 → 加噪声 → 写到 newmedia 服务器 hub-generated/ → 返回永久 URL。
+
+        部署位置自动选路：
+          - 远程（开发本机）→ scp 上传
+          - 在 newmedia 服务器本地运行 → 直接写本地路径，跳过 SSH
+
+        失败返回原 OSS URL（24h 有效）。
+        """
         try:
-            # 1. 下载
             with httpx.Client(timeout=60) as c:
                 r = c.get(oss_url, follow_redirects=True)
             r.raise_for_status()
-            raw = r.content
+            processed = self._add_noise(r.content)
 
-            # 2. 加噪声
-            processed = self._add_noise(raw)
-
-            # 3. 写本地
             fname = f'{draft_id or uuid.uuid4().hex[:12]}.jpg'
             local_path = _LOCAL_CACHE / fname
             local_path.write_bytes(processed)
 
-            # 4. SCP 上传到 newmedia 服务器
-            remote_path = f'{self.remote_dir}/{fname}'
-            subprocess.run(
-                ['scp', '-o', 'StrictHostKeyChecking=no', '-q',
-                 str(local_path), f'root@{self.server_host}:{remote_path}'],
-                check=True, timeout=30, capture_output=True,
-            )
+            remote_path = Path(self.remote_dir) / fname
+            if self._is_running_on_server():
+                # 服务器本地：直接 cp 到挂载目录
+                remote_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(str(local_path), str(remote_path))
+                log.debug('[image_gen] 服务器本地 cp → %s', remote_path)
+            else:
+                # 远程：scp
+                subprocess.run(
+                    ['scp', '-o', 'StrictHostKeyChecking=no', '-q',
+                     str(local_path), f'root@{self.server_host}:{remote_path}'],
+                    check=True, timeout=30, capture_output=True,
+                )
 
             url = f'{self.server_url}{self.url_path}/{fname}'
             log.info('[image_gen] ✓ 反识别处理完成 %s', url)
@@ -127,7 +137,18 @@ class ImageGenerator:
 
         except Exception as e:
             log.warning('[image_gen] post_process 失败 (回退原 OSS URL): %s', e)
-            return oss_url       # fallback：用未处理的原图（24h 有效）
+            return oss_url
+
+    def _is_running_on_server(self) -> bool:
+        """判断当前进程是否就跑在 self.server_host 上（部署后跳过 scp）。"""
+        if not self.server_host or self.server_host in ('localhost', '127.0.0.1'):
+            return True
+        try:
+            target_ips = {info[4][0] for info in socket.getaddrinfo(self.server_host, None)}
+            local_ips  = {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None)}
+            return bool(target_ips & local_ips)
+        except Exception:
+            return False
 
     @staticmethod
     def _add_noise(img_bytes: bytes) -> bytes:
