@@ -13,7 +13,8 @@ from fastapi.responses import HTMLResponse
 
 from publisher_hub.config import load_config, load_prompts
 from publisher_hub.db import Database
-from publisher_hub.routes import home, users, wechat, xhs
+from publisher_hub.routes import admin, home, users, wechat, xhs
+from publisher_hub.scheduler import start_scheduler, stop_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,15 +37,20 @@ async def lifespan(app: FastAPI):
     app.state.db      = db
     log.info('config / prompts / db 已就绪')
 
+    # 启动定时调度（每天 8:00 全用户仿写+推送）
+    start_scheduler(app, cron_expr='0 8 * * *')
+
     yield
 
+    stop_scheduler()
     db.close()
     log.info('=== Publisher Hub 已停止 ===')
 
 
 app = FastAPI(title='Publisher Hub', lifespan=lifespan)
 
-app.include_router(users.router)        # 必须先于 home.router（/{user_id} 通配会吞 /users）
+app.include_router(admin.router)        # 先于 home.router（/{user_id} 通配会吞 /admin）
+app.include_router(users.router)
 app.include_router(home.router)
 app.include_router(wechat.router)
 app.include_router(xhs.router)

@@ -77,17 +77,15 @@ _default_user:
     rewrite_batch: 10
     articles_per_batch: 2
     rewrite_cron: "0 8 * * *"
-    push_cron:    ""
   xhs:
     sources:
       platforms:  [xiaohongshu, douyin]
-      categories: ["泰国留学", "低分留学"]
+      categories: []                   # 空=不限制
     prompt:        "xhs_note"
     rewrite_mode:  "per_post"
     rewrite_batch: 2
     articles_per_batch: 0
-    rewrite_cron: "0 13 * * *"
-    push_cron:    ""
+    rewrite_cron: "0 8 * * *"          # 全用户与 wechat 同 cron
 
 
 # ── 7. 用户池（前端 "+ 新增用户" 自动维护此段）─────────────────────────────────

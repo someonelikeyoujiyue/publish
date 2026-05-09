@@ -47,20 +47,22 @@ _HARDCODED_DEFAULTS = {
         'rewrite_mode':      'batch',
         'rewrite_batch':     10,
         'articles_per_batch': 2,
+        # 定时任务：每天早上 8:00 触发  →  仿写 + 自动推送到草稿箱
+        # （草稿箱不自动群发，运营进公众号后台手动点群发）
         'rewrite_cron':      '0 8 * * *',
-        'push_cron':         '',
     },
     'xhs': {
         'sources': {
             'platforms':  ['xiaohongshu', 'douyin'],
-            'categories': ['泰国留学', '低分留学'],
+            'categories': [],          # 空=不限制 category，所有有内容的帖子都可仿写
         },
         'prompt':            'xhs_note',
         'rewrite_mode':      'per_post',
         'rewrite_batch':     2,
         'articles_per_batch': 0,
-        'rewrite_cron':      '0 13 * * *',
-        'push_cron':         '',
+        # 定时任务：每天早上 8:00 触发  →  仿写 + 自动调 myaibot 生成二维码
+        # （二维码 URL 写入 hub_drafts.pushed_result + 飞书通知运营扫码）
+        'rewrite_cron':      '0 8 * * *',
     },
 }
 
