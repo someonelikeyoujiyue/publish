@@ -74,22 +74,34 @@ class RewriteEngine:
         n_articles = int(pcfg.get('articles_per_batch', 1))
         pick       = pcfg.get('pick_strategy', 'latest')
         recent_pool = int(pcfg.get('recent_pool', 50))
+        candidate_pool = int(pcfg.get('candidate_pool', 0))   # >0 时启用"识图 + LLM 5 选 N"
 
         tmpl = self.prompts.get(prompt_key)
         if not tmpl:
             log.error('prompts.yaml 未定义模板: %s', prompt_key)
             return 0
 
-        posts = db.get_posts_for_user(
-            user_id, platform, sources, limit=batch,
-            pick_strategy=pick, recent_pool=recent_pool,
-        )
+        # xhs：先取 candidate_pool 个候选 → 识图 → LLM 挑最好的 batch 个
+        # wechat / 没配 candidate_pool：直接取 batch 个
+        if platform == 'xhs' and candidate_pool > batch:
+            candidates = db.get_posts_for_user(
+                user_id, platform, sources, limit=candidate_pool,
+                pick_strategy=pick, recent_pool=recent_pool,
+            )
+            log.info('[rewrite] %s/xhs 候选池 %d 条，识图 + LLM 选 %d 条', user_id, len(candidates), batch)
+            posts = self._select_best_xhs_posts(candidates, k=batch, db=db)
+        else:
+            posts = db.get_posts_for_user(
+                user_id, platform, sources, limit=batch,
+                pick_strategy=pick, recent_pool=recent_pool,
+            )
+
         if not posts:
             log.info('[rewrite] %s/%s 无可仿写原帖', user_id, platform)
             return 0
 
         log.info(
-            '[rewrite] %s/%s 模式=%s 取数=%d 模板=%s',
+            '[rewrite] %s/%s 模式=%s 入选=%d 模板=%s',
             user_id, platform, mode, len(posts), prompt_key,
         )
 
@@ -388,39 +400,108 @@ class RewriteEngine:
         return ','.join(urls)
 
     def _collect_xhs_images(
-        self, post_imgs: list[str], title: str, content: str,
+        self, post_imgs: list[str], title: str = '', content: str = '',
         draft_id: int | str = '',
     ) -> list[str]:
-        """小红书配图：1 张原帖图 + 1 张 wan 生图（参考原帖图描述 + 仿写文字）。
+        """小红书配图：直接用原帖真实图（最多 2 张），不再 wan 生图。
 
-        生图流程（vision-aware）：
-          原帖图 → qwen3.6-plus 识图 → 描述 → 与仿写文字一起组 prompt → wan 生图
-          原帖图缺失则降级为纯文字 prompt
+        post 选择前已经过 _select_best_xhs_posts 的"识图 + LLM 5 选 2"筛选，
+        所以这里直接用原帖图就够了。
         """
-        urls: list[str] = []
-        src_img = post_imgs[0] if post_imgs else ''
+        return [u for u in post_imgs[:2] if u and u.strip()]
 
-        # 1. 原帖图作为第一张
-        if src_img:
-            urls.append(src_img)
+    # ── xhs 候选筛选：识图（带缓存）+ LLM 决策 ─────────────────────────────────
 
-        # 2. 识图（如果有原帖图）→ 综合 prompt → wan 生图
-        image_desc = ''
-        if src_img:
+    def _select_best_xhs_posts(self, candidates: list, k: int, db) -> list:
+        """从候选 posts 里识图 + LLM 选最好的 k 个。
+
+        识图复用 newmedia.posts.cover_image_desc 缓存（已识过的不再调）。
+        识完写回 db；LLM 一次决策返回选中的 post.id 列表。
+        """
+        if not candidates or len(candidates) <= k:
+            return candidates
+
+        # Step 1: 补识图
+        for p in candidates:
+            if p.get('cover_image_desc'):
+                continue
+            img_url = self._first_post_http_url(p)
+            if not img_url:
+                continue
             try:
-                image_desc = self.image_gen.analyze_image(src_img)
+                desc = self.image_gen.analyze_image(img_url)
             except Exception as e:
-                log.warning('[rewrite] 识图异常（继续走纯文字 prompt）: %s', e)
+                log.warning('[rewrite] post=%s 识图异常: %s', p.get('id'), e)
+                desc = ''
+            if desc:
+                db.update_post_image_desc(p['id'], desc)
+                p['cover_image_desc'] = desc
 
-        prompt = ImageGenerator.build_xhs_prompt(title or '', content or '',
-                                                 image_desc=image_desc)
-        gen_url = self.image_gen.generate_processed(prompt, draft_id=draft_id)
-        if gen_url:
-            urls.append(gen_url)
+        # Step 2: LLM 决策（仅用有描述的候选）
+        with_desc = [p for p in candidates if p.get('cover_image_desc')]
+        if len(with_desc) <= k:
+            return with_desc or candidates[:k]
 
-        if not urls:
-            log.warning('[rewrite] xhs 草稿既无原帖图也无生成图，images 为空将无法发布')
-        return urls
+        selected_ids = self._llm_pick_best_posts(with_desc, k=k)
+        if not selected_ids:
+            log.warning('[rewrite] LLM 选图无返回，按描述长度兜底')
+            with_desc.sort(key=lambda p: len(p.get('cover_image_desc') or ''), reverse=True)
+            return with_desc[:k]
+
+        id_set = set(selected_ids)
+        chosen = [p for p in with_desc if p['id'] in id_set]
+        if len(chosen) < k:                  # LLM 漏选少了，按原顺序补
+            for p in with_desc:
+                if p['id'] not in id_set:
+                    chosen.append(p)
+                    if len(chosen) == k:
+                        break
+        return chosen[:k]
+
+    def _llm_pick_best_posts(self, candidates: list, k: int) -> list[int]:
+        """让 deepseek 从 candidates 里挑 k 个 id。返回 id 整数列表。"""
+        rows = []
+        for p in candidates:
+            rows.append({
+                'id':         p['id'],
+                'image_desc': (p.get('cover_image_desc') or '').strip(),
+                'title':      ((p.get('translated_title') or p.get('title') or '')[:60]).strip(),
+            })
+        prompt = (
+            f'有 {len(rows)} 张候选小红书图片，请从中选出最适合作为小红书图文笔记配图的 {k} 张。\n\n'
+            f'判断标准（重要度递减）：\n'
+            f'- 画面具体真实（场景、人物、物品、风景；剔除纯文字截图、图标、表情包、低质量截图）\n'
+            f'- 视觉吸引力（构图、色彩、生活感）\n'
+            f'- 适合"泰国留学/校园生活"主题\n\n'
+            f'候选（JSON）：\n{json.dumps(rows, ensure_ascii=False, indent=2)}\n\n'
+            f'只输出 JSON，不要任何解释：\n'
+            f'{{"selected_ids": [id1, id2]}}'
+        )
+
+        text = self._call_llm(prompt)
+        if not text:
+            return []
+        try:
+            m = re.search(r'\{[^{}]*"selected_ids"\s*:\s*\[[^\]]*\][^{}]*\}', text)
+            if not m:
+                m = re.search(r'\[\s*\d+(\s*,\s*\d+)*\s*\]', text)
+                if m:
+                    return [int(x) for x in re.findall(r'\d+', m.group(0))][:k]
+                return []
+            data = json.loads(m.group(0))
+            ids = data.get('selected_ids') or []
+            return [int(i) for i in ids][:k]
+        except Exception as e:
+            log.warning('[rewrite] LLM 选图响应解析失败: %s  text=%s', e, text[:200])
+            return []
+
+    def _first_post_http_url(self, post: dict) -> str:
+        """取 post 第一张图的 HTTP URL（attach 优先 → cover_local → cover_url CDN 兜底）。"""
+        for u in self._collect_images(post).split(','):
+            u = u.strip()
+            if u:
+                return u
+        return ''
 
     def collect_images_for_draft(self, post_imgs: list[str], category: str = '') -> list[str]:
         """草稿层图片汇总：原帖图 + RSU 兜底，确保至少 min_images 张。

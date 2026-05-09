@@ -63,6 +63,8 @@ _HARDCODED_DEFAULTS = {
         'articles_per_batch': 0,
         # 取数策略：全池 ORDER BY RAND() 完全随机（fxj 池 999+ 条多样性更好）
         'pick_strategy':     'random',
+        # 候选池：先随机取 candidate_pool 个 → 识图 → LLM 选最好的 rewrite_batch 个
+        'candidate_pool':    5,
         'rewrite_cron':      '0 8 * * *',
     },
 }

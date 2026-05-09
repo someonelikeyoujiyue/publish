@@ -125,6 +125,7 @@ class Database:
             SELECT p.id, p.platform, p.post_id, p.nickname, p.category,
                    p.title, p.content, p.translated_title, p.translated_content,
                    p.cover_url, p.cover_local_path, p.attachment_local_path,
+                   p.cover_image_desc,
                    p.discovered_at, p.published_at
             FROM posts p
             LEFT JOIN hub_drafts d
@@ -158,6 +159,18 @@ class Database:
         log.info('[db] %s/%s pick=%s pool=%d -> %d 条',
                  user_id, platform, pick_strategy, len(rows), min(limit, len(rows)))
         return rows[:limit]
+
+    def update_post_image_desc(self, post_id: int, desc: str) -> None:
+        """写入 newmedia.posts.cover_image_desc（识图缓存）。"""
+        try:
+            with self._cur() as cur:
+                cur.execute(
+                    'UPDATE posts SET cover_image_desc=%s WHERE id=%s',
+                    (desc, post_id),
+                )
+        except Exception as e:
+            log.warning('[db] update_post_image_desc 失败: %s', e)
+
 
     # ── hub_drafts 操作 ──────────────────────────────────────────────
 
