@@ -1,0 +1,144 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Publisher Hub 配置示例
+# ══════════════════════════════════════════════════════════════════════════════
+# 复制：cp config.example.yaml config.yaml
+# 然后填入下面所有 <PLACEHOLDER> 的真实值。
+# config.yaml 已加入 .gitignore，绝不要 commit 真实凭证。
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── 1. 数据库（共用 newmedia MySQL）────────────────────────────────────────────
+mysql:
+  host:     "<MYSQL_HOST>"
+  port:     3306
+  user:     "<MYSQL_USER>"
+  password: "<MYSQL_PASSWORD>"
+  database: "newmedia"
+  # 服务器图片 HTTP 服务（newmedia 已挂载 /img/cover、/img/attach、/img/rsu、/img/hub-gen）
+  image_server_url: "http://<SERVER_IP>:8899"
+  cover_dir:        "/data/newmedia/covers"
+  attachment_dir:   "/data/newmedia/attachments"
+
+
+# ── 2. 仿写 LLM（valueclue 兼容 OpenAI 接口）───────────────────────────────────
+llm:
+  api_key:  "<VALUECLUE_API_KEY>"
+  base_url: "https://valueclue.com/claw/api/proxy/v1"
+  model:    "deepseek-v4-pro"
+  max_tokens: 50000             # stream 模式下给足 reasoning + 正文 token
+  timeout_seconds: 300
+
+
+# ── 3. 小红书发布服务（myaibot.vip，全用户共享一个 token）──────────────────────
+myaibot:
+  token:   "<MYAIBOT_TOKEN>"
+  # /publish    — 1 次调用，要求 images URL 公网可达
+  # /publish-with-upload — 2 次调用，自动转存
+  api_url: "https://www.myaibot.vip/api/rednote/publish"
+
+
+# ── 4. 飞书 webhook（推送/失败通知；含 'xxxxxxxx' 占位则跳过不报错）───────────
+feishu:
+  webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"
+
+
+# ── 5. Web 服务 ────────────────────────────────────────────────────────────────
+server:
+  host: "0.0.0.0"
+  port: 8900
+
+
+# ── RSU 素材库（仿写时图片不足从这里随机补；wechat 用）────────────────────────
+assets:
+  rsu_base_url:  "http://<SERVER_IP>:8899/img/rsu"
+  min_images:    4
+
+
+# ── 图像生成（小红书配图用 wan2.7-image-pro）──────────────────────────────────
+image_gen:
+  enabled: true
+  model:    "wan2.7-image-pro"
+  size:     "1024*1024"
+  # 本地调试 valueclue 16.8s 超时时填 SOCKS5；服务器部署留空
+  proxy:    ""
+  timeout_seconds: 180
+
+
+# ── 6. 用户池 ──────────────────────────────────────────────────────────────────
+# 每个用户拥有独立的：公众号 / 小红书 / 抓取条件 / cron
+# user.id 用作 URL 路径（/{user_id}/wechat），保持英文小写
+
+users:
+
+  - id: alice
+    name: "示例运营 A"
+
+    wechat:
+      app_id:     "<WECHAT_APP_ID>"
+      app_secret: "<WECHAT_APP_SECRET>"
+      proxy:      "<SOCKS5_URL_FOR_WECHAT_API_WHITELIST>"
+      author:     ""
+
+      sources:
+        platforms:  [youtube, facebook, instagram]
+        categories: ["学校官方"]
+
+      prompt:        "wechat_article"
+      rewrite_mode:  "batch"
+      rewrite_batch: 10
+      articles_per_batch: 2
+
+      rewrite_cron: "0 8 * * *"
+      push_cron:    ""
+
+    xhs:
+      display_name: "Alice 的小红书"
+
+      sources:
+        platforms:  [xiaohongshu, douyin]
+        categories: ["泰国留学", "低分留学"]
+
+      prompt:        "xhs_note"
+      rewrite_mode:  "per_post"
+      rewrite_batch: 2
+      articles_per_batch: 0
+
+      rewrite_cron: "0 13 * * *"
+      push_cron:    ""
+
+
+  - id: bob
+    name: "示例运营 B"
+
+    wechat:
+      app_id:     "<WECHAT_APP_ID>"
+      app_secret: "<WECHAT_APP_SECRET>"
+      proxy:      "<SOCKS5_URL_FOR_WECHAT_API_WHITELIST>"
+      author:     ""
+
+      sources:
+        platforms:  [youtube, facebook]
+        categories: ["学校官方"]
+
+      prompt:        "wechat_article"
+      rewrite_mode:  "batch"
+      rewrite_batch: 10
+      articles_per_batch: 2
+
+      rewrite_cron: "30 9 * * *"
+      push_cron:    ""
+
+    xhs:
+      display_name: "Bob 的小红书"
+
+      sources:
+        platforms:  [xiaohongshu]
+        categories: ["单招", "艺考"]
+
+      prompt:        "xhs_note"
+      rewrite_mode:  "per_post"
+      rewrite_batch: 2
+      articles_per_batch: 0
+
+      rewrite_cron: "0 14 * * *"
+      push_cron:    ""

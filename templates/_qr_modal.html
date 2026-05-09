@@ -1,0 +1,44 @@
+{# 推送成功响应：渲染二维码（base64 图）或嵌入发布页 #}
+{% if qr_url %}
+<div style="background:#fffbeb;border:2px solid #fcd34d;
+            padding:14px 18px;border-radius:8px;margin-top:8px;
+            max-width:340px;text-align:center;">
+
+  {% if qr_url.startswith('data:image') %}
+    {# 标准情况：base64 二维码图，直接渲染 #}
+    <p style="margin:0 0 10px;color:#78350f;font-size:13px;font-weight:600;">
+      📱 用网页或微信扫码，跳转到小红书发布
+    </p>
+    <img src="{{ qr_url }}"
+         style="width:240px;height:240px;display:block;margin:0 auto;
+                background:#fff;border:1px solid #fde68a;border-radius:4px;
+                padding:6px;"
+         alt="发布二维码">
+  {% else %}
+    {# 兜底：发布页 URL，iframe 嵌入 #}
+    <p style="margin:0 0 8px;color:#78350f;font-size:13px;font-weight:600;">
+      📱 myaibot 发布页（页面内含二维码）
+    </p>
+    <iframe src="{{ qr_url }}"
+            style="width:100%;height:480px;border:1px solid #fde68a;
+                   border-radius:6px;background:#fff;"
+            referrerpolicy="no-referrer" loading="lazy"></iframe>
+    <div style="margin-top:8px;">
+      <a href="{{ qr_url }}" target="_blank" rel="noopener"
+         style="color:#92400e;font-size:12px;text-decoration:underline;">
+        ↗ 在新标签打开
+      </a>
+    </div>
+  {% endif %}
+
+  <p style="margin:10px 0 0;color:#92400e;font-size:12px;
+            line-height:1.4;word-break:break-all;">
+    {{ title[:40] }}
+  </p>
+</div>
+{% else %}
+<div style="display:inline-block;padding:12px 18px;background:#dcfce7;
+            color:#166534;border-radius:6px;font-size:13px;margin-top:8px;">
+  ✓ 已自动发布（myaibot 未返回扫码链接）
+</div>
+{% endif %}

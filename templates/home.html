@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}用户列表 — Publisher Hub{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <h2>所有运营人员</h2>
+  <span style="color: var(--text-mid); font-size: 13px;">
+    共 {{ users|length }} 人 · 点击进入个人工作台
+  </span>
+</div>
+
+{% if users %}
+<div class="user-grid">
+  {% for u in users %}
+  <div class="user-card">
+    <div class="user-card-name">{{ u.name }}</div>
+    <div class="user-card-id">@{{ u.id }}</div>
+
+    <div class="user-card-stats">
+      <div class="user-stat">
+        <div class="user-stat-num">{{ u.wechat_count }}</div>
+        <div class="user-stat-label">公众号草稿</div>
+      </div>
+      <div class="user-stat">
+        <div class="user-stat-num">{{ u.xhs_count }}</div>
+        <div class="user-stat-label">小红书待发</div>
+      </div>
+    </div>
+
+    <div class="user-card-links">
+      <a href="/{{ u.id }}/wechat" class="btn btn-primary" style="flex:1; justify-content:center;">公众号</a>
+      <a href="/{{ u.id }}/xhs" class="btn btn-secondary" style="flex:1; justify-content:center;">小红书</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  <div class="empty-icon">👥</div>
+  <div class="empty-text">还没有配置用户</div>
+  <div style="font-size: 13px;">编辑 <code>config.yaml</code> 的 <code>users:</code> 段</div>
+</div>
+{% endif %}
+{% endblock %}
