@@ -21,7 +21,8 @@
     <button class="btn btn-secondary"
             hx-post="/{{ user.id }}/{{ platform }}/refresh"
             hx-target="#list-area"
-            hx-disabled-elt="this">
+            hx-disabled-elt="this"
+            hx-on::after-request="this.classList.remove('htmx-request')">
       <span class="btn-text">🔄 立即仿写一批</span>
       <span class="btn-loading">
         <span class="spinner"></span> 仿写中（每条约 60 秒）…
