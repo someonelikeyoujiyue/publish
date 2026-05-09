@@ -18,12 +18,14 @@
 <div class="toolbar">
   <h2>{{ platform_label }}草稿</h2>
   <div class="toolbar-actions">
-    <span class="htmx-indicator">⏳ 仿写中（30-180秒）...</span>
     <button class="btn btn-secondary"
             hx-post="/{{ user.id }}/{{ platform }}/refresh"
             hx-target="#list-area"
-            hx-indicator=".htmx-indicator">
-      🔄 立即仿写一批
+            hx-disabled-elt="this">
+      <span class="btn-text">🔄 立即仿写一批</span>
+      <span class="btn-loading">
+        <span class="spinner"></span> 仿写中（每条约 60 秒）…
+      </span>
     </button>
   </div>
 </div>
