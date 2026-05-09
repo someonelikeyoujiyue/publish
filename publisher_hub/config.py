@@ -47,8 +47,9 @@ _HARDCODED_DEFAULTS = {
         'rewrite_mode':      'batch',
         'rewrite_batch':     10,
         'articles_per_batch': 2,
-        # 定时任务：每天早上 8:00 触发  →  仿写 + 自动推送到草稿箱
-        # （草稿箱不自动群发，运营进公众号后台手动点群发）
+        # 取数策略：从最近 50 条池里 Python 随机抽 10 条素材综合写
+        'pick_strategy':     'recent_random',
+        'recent_pool':       50,
         'rewrite_cron':      '0 8 * * *',
     },
     'xhs': {
@@ -60,8 +61,8 @@ _HARDCODED_DEFAULTS = {
         'rewrite_mode':      'per_post',
         'rewrite_batch':     2,
         'articles_per_batch': 0,
-        # 定时任务：每天早上 8:00 触发  →  仿写 + 自动调 myaibot 生成二维码
-        # （二维码 URL 写入 hub_drafts.pushed_result + 飞书通知运营扫码）
+        # 取数策略：全池 ORDER BY RAND() 完全随机（fxj 池 999+ 条多样性更好）
+        'pick_strategy':     'random',
         'rewrite_cron':      '0 8 * * *',
     },
 }

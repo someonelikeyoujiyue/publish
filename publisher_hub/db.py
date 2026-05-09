@@ -83,14 +83,21 @@ class Database:
         platform: str,
         sources: dict,
         limit: int = 10,
+        pick_strategy: str = 'latest',
+        recent_pool: int = 50,
     ) -> list[dict]:
-        """从 newmedia.posts 取该用户该平台未仿写过的最新原帖。
+        """从 newmedia.posts 取该用户该平台未仿写过的原帖。
 
-        通过 LEFT JOIN hub_drafts 排除已写入 hub_drafts 的 post（按 user_id+platform 维度）。
+        通过 LEFT JOIN hub_drafts 排除已仿写过的（按 user_id+platform 维度）。
 
         Args:
-            sources: {platforms: [...], categories: [...]}（来自 config）
+            sources: {platforms, categories}
+            pick_strategy:
+                'latest'        — discovered_at DESC LIMIT N（最新）
+                'random'        — ORDER BY RAND() LIMIT N（全池随机；xhs 用）
+                'recent_random' — 取最近 recent_pool 条 → Python random.sample N（wechat 用）
         """
+        import random
         platforms  = sources.get('platforms') or []
         categories = sources.get('categories') or []
         if not platforms:
@@ -102,6 +109,17 @@ class Database:
         if categories:
             ph_c = ','.join(['%s'] * len(categories))
             cat_clause = f'AND p.category IN ({ph_c})'
+
+        # 排序 + LIMIT 由策略决定
+        if pick_strategy == 'random':
+            order_clause = 'ORDER BY RAND()'
+            sql_limit    = limit
+        elif pick_strategy == 'recent_random':
+            order_clause = 'ORDER BY p.discovered_at DESC'
+            sql_limit    = max(recent_pool, limit)        # 先拿大池
+        else:
+            order_clause = 'ORDER BY p.discovered_at DESC'
+            sql_limit    = limit
 
         sql = f"""
             SELECT p.id, p.platform, p.post_id, p.nickname, p.category,
@@ -118,21 +136,28 @@ class Database:
               AND d.id IS NULL
               AND ((p.content            IS NOT NULL AND p.content            != '')
                 OR (p.translated_content IS NOT NULL AND p.translated_content != ''))
-            ORDER BY p.discovered_at DESC
+            {order_clause}
             LIMIT %s
         """
         params: list = [user_id, platform]
         params.extend(platforms)
         params.extend(categories)
-        params.append(limit)
+        params.append(sql_limit)
 
         try:
             with self._cur() as cur:
                 cur.execute(sql, params)
-                return list(cur.fetchall())
+                rows = list(cur.fetchall())
         except Exception as e:
             log.warning('[db] get_posts_for_user 失败: %s', e)
             return []
+
+        if pick_strategy == 'recent_random' and len(rows) > limit:
+            rows = random.sample(rows, limit)
+
+        log.info('[db] %s/%s pick=%s pool=%d -> %d 条',
+                 user_id, platform, pick_strategy, len(rows), min(limit, len(rows)))
+        return rows[:limit]
 
     # ── hub_drafts 操作 ──────────────────────────────────────────────
 

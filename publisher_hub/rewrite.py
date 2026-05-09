@@ -72,13 +72,18 @@ class RewriteEngine:
         mode       = pcfg.get('rewrite_mode', 'per_post')
         batch      = int(pcfg.get('rewrite_batch', 5))
         n_articles = int(pcfg.get('articles_per_batch', 1))
+        pick       = pcfg.get('pick_strategy', 'latest')
+        recent_pool = int(pcfg.get('recent_pool', 50))
 
         tmpl = self.prompts.get(prompt_key)
         if not tmpl:
             log.error('prompts.yaml 未定义模板: %s', prompt_key)
             return 0
 
-        posts = db.get_posts_for_user(user_id, platform, sources, limit=batch)
+        posts = db.get_posts_for_user(
+            user_id, platform, sources, limit=batch,
+            pick_strategy=pick, recent_pool=recent_pool,
+        )
         if not posts:
             log.info('[rewrite] %s/%s 无可仿写原帖', user_id, platform)
             return 0
