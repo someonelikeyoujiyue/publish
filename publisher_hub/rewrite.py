@@ -391,19 +391,29 @@ class RewriteEngine:
         self, post_imgs: list[str], title: str, content: str,
         draft_id: int | str = '',
     ) -> list[str]:
-        """小红书配图：1 张原帖图 + 1 张 wan 生图（已加噪声、永久 URL）。
+        """小红书配图：1 张原帖图 + 1 张 wan 生图（参考原帖图描述 + 仿写文字）。
 
-        - 任一缺失则只用另一张
-        - 都缺失会导致发布失败（小红书 images 必须非空）
+        生图流程（vision-aware）：
+          原帖图 → qwen3.6-plus 识图 → 描述 → 与仿写文字一起组 prompt → wan 生图
+          原帖图缺失则降级为纯文字 prompt
         """
         urls: list[str] = []
+        src_img = post_imgs[0] if post_imgs else ''
 
-        # 1. 原帖图（取第一张）
-        if post_imgs:
-            urls.append(post_imgs[0])
+        # 1. 原帖图作为第一张
+        if src_img:
+            urls.append(src_img)
 
-        # 2. wan 生图 + 加噪声 + 上传永久 URL
-        prompt = ImageGenerator.build_xhs_prompt(title or '', content or '')
+        # 2. 识图（如果有原帖图）→ 综合 prompt → wan 生图
+        image_desc = ''
+        if src_img:
+            try:
+                image_desc = self.image_gen.analyze_image(src_img)
+            except Exception as e:
+                log.warning('[rewrite] 识图异常（继续走纯文字 prompt）: %s', e)
+
+        prompt = ImageGenerator.build_xhs_prompt(title or '', content or '',
+                                                 image_desc=image_desc)
         gen_url = self.image_gen.generate_processed(prompt, draft_id=draft_id)
         if gen_url:
             urls.append(gen_url)

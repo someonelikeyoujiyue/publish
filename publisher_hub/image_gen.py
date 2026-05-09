@@ -1,18 +1,20 @@
 """调用 wan2.7-image-pro 生成单张配图，并做"反 AI 识别"处理。
 
-流程：
-    1. POST valueclue `/v1/images/generations` → 阿里 OSS URL（24h 有效）
-    2. 下载图 → PIL 加噪声/抖动/重压缩 → MD5 改变、感知哈希漂移
-    3. SCP 上传到 newmedia 服务器 /data/assets/hub-generated/<id>.jpg
-    4. 返回永久 URL: http://47.236.168.208:8899/img/hub-gen/<id>.jpg
+流程（vision-aware）：
+    1. 用 qwen3.6-plus 看原帖图 → ≤30 字中文描述（如有原帖图）
+    2. build_xhs_prompt(title, content, image_desc) → 综合 prompt
+    3. POST /v1/images/generations → 阿里 OSS URL（24h 有效）
+    4. 下载 → PIL 加噪声/抖动/重压缩 → MD5 改变、感知哈希漂移
+    5. 服务器本地 cp 或 SCP → /data/assets/hub-generated/<id>.jpg
+    6. 返回永久 URL: http://47.236.168.208:8899/img/hub-gen/<id>.jpg
 
-如果 SCP / 处理失败则 fallback 返回原 OSS URL（24h 有效但能用）。
-
-部署到 47.236.168.208 服务器后 image_gen.proxy 改空，直连即可。
+任何步骤失败 → 回退到原 OSS URL（24h 有效）或纯文字 prompt（无 image_desc）。
 """
 from __future__ import annotations
 
+import base64
 import io
+import json
 import logging
 import random
 import shutil
@@ -44,6 +46,9 @@ class ImageGenerator:
         self.proxy    = ig.get('proxy') or None       # 默认空，本地调试可填 SOCKS5
         self.timeout  = float(ig.get('timeout_seconds', 180))
         self.enabled  = bool(self.api_key) and bool(ig.get('enabled', True))
+
+        # vision 识图：默认 qwen3.6-plus（newmedia 实证稳定）
+        self.vision_model = ig.get('vision_model', 'qwen3.6-plus')
 
         # 反 AI 识别 + 永久 URL（newmedia 服务器侧 /img/hub-gen 挂载）
         ms = config.get('mysql') or {}
@@ -207,15 +212,93 @@ class ImageGenerator:
         img.save(out, format='JPEG', quality=random.randint(82, 92), optimize=True)
         return out.getvalue()
 
+    # ── 识图：把原帖图给 qwen3.6-plus 看，得到 ≤30 字描述 ─────────────────────
+
+    def analyze_image(self, image_url: str) -> str:
+        """用 vision 模型看图，返回简洁中文描述。失败返回 ''。"""
+        if not self.enabled or not image_url:
+            return ''
+
+        try:
+            # 下载图片转 base64（vision 模型走 base64 更稳，避免它访问 URL 有限制）
+            with httpx.Client(timeout=30, proxy=self.proxy) as c:
+                r = c.get(image_url, follow_redirects=True)
+            r.raise_for_status()
+            img_b64 = base64.b64encode(r.content).decode()
+        except Exception as e:
+            log.warning('[image_gen] 识图前下载失败 %s: %s', image_url[:60], e)
+            return ''
+
+        body = {
+            'model': self.vision_model,
+            'messages': [{
+                'role': 'user',
+                'content': [
+                    {'type': 'image_url',
+                     'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+                    {'type': 'text',
+                     'text': '用 30 字以内中文，简洁描述这张图片的主体、色调和氛围。只输出描述本身。'},
+                ],
+            }],
+            'max_tokens': 200,
+            'stream':     True,                 # valueclue 16.8s 硬超时，stream 绕过
+        }
+
+        content_parts: list[str] = []
+        try:
+            with httpx.Client(timeout=120, proxy=self.proxy) as c:
+                with c.stream(
+                    'POST',
+                    f'{self.base_url}/chat/completions',
+                    headers={
+                        'Authorization': f'Bearer {self.api_key}',
+                        'Content-Type':  'application/json',
+                    },
+                    json=body,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        body_text = b''.join(resp.iter_bytes()).decode('utf-8', errors='replace')
+                        log.warning('[image_gen] 识图 HTTP %d: %s',
+                                    resp.status_code, body_text[:300])
+                        return ''
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        line = line.strip()
+                        if line.startswith('data:'):
+                            line = line[5:].strip()
+                        if line == '[DONE]':
+                            break
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = (chunk.get('choices') or [{}])[0].get('delta') or {}
+                        c_text = delta.get('content') or ''
+                        if c_text:
+                            content_parts.append(c_text)
+        except Exception as e:
+            log.warning('[image_gen] 识图调用失败: %s', e)
+            return ''
+
+        desc = ''.join(content_parts).strip().replace('\n', ' ')
+        log.info('[image_gen] ✓ 识图完成: %s', desc[:60])
+        return desc
+
     @staticmethod
-    def build_xhs_prompt(title: str, content: str) -> str:
-        """从仿写后的标题+正文构造图像 prompt。"""
+    def build_xhs_prompt(title: str, content: str, image_desc: str = '') -> str:
+        """从仿写标题+正文 + (可选) 原帖图描述 综合构造 prompt。"""
         snippet = (content or '').replace('\n', ' ').strip()[:150]
-        return (
-            f'为小红书图文笔记配一张图。\n'
-            f'标题：{title}\n'
-            f'内容：{snippet}\n'
-            f'风格要求：小清新摄影风格，色调明亮自然、年轻人喜欢的视觉。'
-            f'符合泰国留学、校园生活、热带风光、学生分享的氛围。'
-            f'画面构图简洁、不要文字水印、不要拼贴感。'
+        lines = ['为小红书图文笔记配一张图。']
+        if image_desc:
+            lines.append(f'参考原帖图特征：{image_desc}（用于风格/主体借鉴，不是复制）')
+        lines.append(f'仿写标题：{title}')
+        lines.append(f'仿写主题：{snippet}')
+        lines.append(
+            '风格要求：小清新摄影风格，色调明亮自然、年轻人喜欢的视觉。'
+            '符合泰国留学/校园生活/热带风光/学生分享氛围。'
+            '画面构图简洁、不要文字水印、不要拼贴感。'
         )
+        return '\n'.join(lines)
