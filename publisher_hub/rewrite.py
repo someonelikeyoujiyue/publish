@@ -81,21 +81,17 @@ class RewriteEngine:
             log.error('prompts.yaml 未定义模板: %s', prompt_key)
             return 0
 
-        # xhs：先取 candidate_pool 个候选 → 识图 → LLM 挑最好的 batch 个
-        # wechat / 没配 candidate_pool：直接取 batch 个
-        if platform == 'xhs' and candidate_pool > batch:
-            candidates = db.get_posts_for_user(
-                user_id, platform, sources, limit=candidate_pool,
-                pick_strategy=pick, recent_pool=recent_pool,
-            )
-            log.info('[rewrite] %s/xhs 候选池 %d 条，识图 + LLM 选 %d 条', user_id, len(candidates), batch)
-            posts = self._select_best_xhs_posts(candidates, k=batch, db=db)
-        else:
-            posts = db.get_posts_for_user(
-                user_id, platform, sources, limit=batch,
-                pick_strategy=pick, recent_pool=recent_pool,
+        # xhs 专属流程：每篇仿写各自抽 candidate_pool 个候选 → 识图 → LLM 选 2 张图作配图
+        if platform == 'xhs' and candidate_pool > 0:
+            return self._per_post_xhs(
+                user_id, db, batch, candidate_pool, sources,
+                pick, recent_pool, tmpl,
             )
 
+        posts = db.get_posts_for_user(
+            user_id, platform, sources, limit=batch,
+            pick_strategy=pick, recent_pool=recent_pool,
+        )
         if not posts:
             log.info('[rewrite] %s/%s 无可仿写原帖', user_id, platform)
             return 0
@@ -134,14 +130,9 @@ class RewriteEngine:
                 continue
 
             post_imgs = [u for u in self._collect_images(post).split(',') if u.strip()]
-            if platform == 'xhs':
-                # 用 source_post_id 给生成图命名（可重复用同名覆盖）
-                final_imgs = self._collect_xhs_images(
-                    post_imgs, new_title, new_content,
-                    draft_id=f'{user_id}-{post["id"]}',
-                )
-            else:
-                final_imgs = self.collect_images_for_draft(post_imgs, category=post.get('category', ''))
+            final_imgs = self.collect_images_for_draft(
+                post_imgs, category=post.get('category', ''),
+            )
             db.save_draft(
                 user_id        = user_id,
                 platform       = platform,
@@ -399,64 +390,134 @@ class RewriteEngine:
 
         return ','.join(urls)
 
-    def _collect_xhs_images(
-        self, post_imgs: list[str], title: str = '', content: str = '',
-        draft_id: int | str = '',
-    ) -> list[str]:
-        """小红书配图：直接用原帖真实图（最多 2 张），不再 wan 生图。
+    # ── xhs 专属流程：每篇独立"5 选 2 图" ─────────────────────────────────────
 
-        post 选择前已经过 _select_best_xhs_posts 的"识图 + LLM 5 选 2"筛选，
-        所以这里直接用原帖图就够了。
+    def _per_post_xhs(self, user_id, db, batch, candidate_pool, sources,
+                     pick, recent_pool, tmpl) -> int:
+        """xhs 仿写：每篇笔记独立从 candidate_pool 个候选里 LLM 选 2 张图作配图。
+
+        流程（每篇）：
+          1. random 抽 candidate_pool 个 posts（"每篇各自抽 5 个"）
+          2. 识图（缓存命中跳过）
+          3. LLM 选 2 张最合适
+          4. 这 2 张图作本篇配图
+          5. 仿写文字：选中 2 张图对应 posts 的第 1 个作主素材
         """
-        return [u for u in post_imgs[:2] if u and u.strip()]
+        # 一次取 batch * candidate_pool 个 posts，按顺序拆 batch 组（已 LEFT JOIN 排除已仿写）
+        total = db.get_posts_for_user(
+            user_id, 'xhs', sources, limit=batch * candidate_pool,
+            pick_strategy=pick, recent_pool=recent_pool,
+        )
+        if not total:
+            log.info('[rewrite] %s/xhs 候选池为空', user_id)
+            return 0
 
-    # ── xhs 候选筛选：识图（带缓存）+ LLM 决策 ─────────────────────────────────
+        log.info('[rewrite] %s/xhs 候选总池=%d 条，分 %d 组每组 %d',
+                 user_id, len(total), batch, candidate_pool)
 
-    def _select_best_xhs_posts(self, candidates: list, k: int, db) -> list:
-        """从候选 posts 里识图 + LLM 选最好的 k 个。
-
-        识图复用 newmedia.posts.cover_image_desc 缓存（已识过的不再调）。
-        识完写回 db；LLM 一次决策返回选中的 post.id 列表。
-        """
-        if not candidates or len(candidates) <= k:
-            return candidates
-
-        # Step 1: 补识图
-        for p in candidates:
-            if p.get('cover_image_desc'):
+        count = 0
+        already_main: set[int] = set()      # 防同一 post 被重复用作仿写主素材
+        for i in range(batch):
+            group = total[i * candidate_pool : (i + 1) * candidate_pool]
+            if len(group) < 2:
+                log.warning('[rewrite] %s/xhs 第 %d 组候选不足 2，跳过', user_id, i + 1)
                 continue
-            img_url = self._first_post_http_url(p)
-            if not img_url:
+
+            # 1. 识图（缓存优先）
+            for p in group:
+                if p.get('cover_image_desc'):
+                    continue
+                img_url = self._first_post_http_url(p)
+                if not img_url:
+                    continue
+                try:
+                    desc = self.image_gen.analyze_image(img_url)
+                except Exception as e:
+                    log.warning('[rewrite] post=%s 识图异常: %s', p.get('id'), e)
+                    desc = ''
+                if desc:
+                    db.update_post_image_desc(p['id'], desc)
+                    p['cover_image_desc'] = desc
+
+            # 2. LLM 选 2 张最好的图
+            with_desc = [p for p in group if p.get('cover_image_desc')]
+            selected: list[dict] = []
+            if len(with_desc) >= 2:
+                ids = self._llm_pick_best_posts(with_desc, k=2)
+                if ids:
+                    id_set = set(ids)
+                    selected = [p for p in with_desc if p['id'] in id_set][:2]
+            # 兜底：LLM 失败/没足够描述 → 取前 2 个
+            if len(selected) < 2:
+                for p in group:
+                    if p not in selected:
+                        selected.append(p)
+                        if len(selected) == 2:
+                            break
+            if len(selected) < 2:
+                log.warning('[rewrite] %s/xhs 第 %d 组凑不齐 2 张图', user_id, i + 1)
                 continue
+
+            # 3. 收集 2 张配图（每个 selected post 取首图）
+            selected_imgs: list[str] = []
+            for p in selected:
+                u = self._first_post_http_url(p)
+                if u and u not in selected_imgs:
+                    selected_imgs.append(u)
+            if len(selected_imgs) < 2:
+                # 极少：选中的 2 个 post 都没图。从同组其它 post 借
+                for p in group:
+                    if p in selected:
+                        continue
+                    u = self._first_post_http_url(p)
+                    if u and u not in selected_imgs:
+                        selected_imgs.append(u)
+                        if len(selected_imgs) == 2:
+                            break
+            if len(selected_imgs) < 1:
+                log.warning('[rewrite] %s/xhs 第 %d 组无图可用，跳过', user_id, i + 1)
+                continue
+
+            # 4. 仿写主素材：selected 里第一个还没用过的
+            main_post = next((p for p in selected if p['id'] not in already_main), selected[0])
+            already_main.add(main_post['id'])
+
+            title   = (main_post.get('translated_title')   or main_post.get('title')   or '').strip()
+            content = (main_post.get('translated_content') or main_post.get('content') or '').strip()
+            if not (title or content):
+                log.warning('[rewrite] %s/xhs 第 %d 组主素材无文字，跳过', user_id, i + 1)
+                continue
+
             try:
-                desc = self.image_gen.analyze_image(img_url)
-            except Exception as e:
-                log.warning('[rewrite] post=%s 识图异常: %s', p.get('id'), e)
-                desc = ''
-            if desc:
-                db.update_post_image_desc(p['id'], desc)
-                p['cover_image_desc'] = desc
+                prompt = tmpl.format(title=title, content=content[:4000])
+            except KeyError as e:
+                log.warning('[rewrite] xhs 模板缺少占位符: %s', e)
+                continue
 
-        # Step 2: LLM 决策（仅用有描述的候选）
-        with_desc = [p for p in candidates if p.get('cover_image_desc')]
-        if len(with_desc) <= k:
-            return with_desc or candidates[:k]
+            text = self._call_llm(prompt)
+            if not text:
+                continue
+            new_title, new_content = self._parse_response(text, 'xhs')
+            if not new_content:
+                continue
 
-        selected_ids = self._llm_pick_best_posts(with_desc, k=k)
-        if not selected_ids:
-            log.warning('[rewrite] LLM 选图无返回，按描述长度兜底')
-            with_desc.sort(key=lambda p: len(p.get('cover_image_desc') or ''), reverse=True)
-            return with_desc[:k]
+            db.save_draft(
+                user_id         = user_id,
+                platform        = 'xhs',
+                source_post_id  = main_post['id'],
+                source_post_ids = ','.join(str(p['id']) for p in selected),
+                title           = new_title,
+                content         = new_content,
+                image_urls      = ','.join(selected_imgs[:2]),
+            )
+            log.info(
+                '[rewrite] ✓ %s/xhs 第 %d/%d 篇 main=%s 图=%d 张  → %s',
+                user_id, i + 1, batch, main_post['id'], len(selected_imgs[:2]),
+                (new_title or '')[:30],
+            )
+            count += 1
 
-        id_set = set(selected_ids)
-        chosen = [p for p in with_desc if p['id'] in id_set]
-        if len(chosen) < k:                  # LLM 漏选少了，按原顺序补
-            for p in with_desc:
-                if p['id'] not in id_set:
-                    chosen.append(p)
-                    if len(chosen) == k:
-                        break
-        return chosen[:k]
+        return count
 
     def _llm_pick_best_posts(self, candidates: list, k: int) -> list[int]:
         """让 deepseek 从 candidates 里挑 k 个 id。返回 id 整数列表。"""
