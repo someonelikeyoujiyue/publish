@@ -717,6 +717,64 @@ After=network.target newmedia-web.service
 **日志**：`journalctl -u publisher-hub -f`
 **重启**：`systemctl restart publisher-hub`
 
+### 2026-05-09 — 用户增删改 + 默认值机制 + 热加载
+
+**目标**：首页"+ 新增用户"按钮 → modal 表单 → 写 yaml → 自动热加载，无需 systemctl restart。
+
+**配置结构**：
+```yaml
+_default_user:                    # 全用户共享默认值
+  wechat:
+    proxy:      "..."             # 微信 IP 白名单代理
+    sources:    {...}
+    prompt:     "wechat_article"
+    rewrite_cron: "0 8 * * *"     # 每天 8:00 全用户仿写
+    push_cron:  ""
+  xhs:
+    sources:    {...}
+    rewrite_cron: "0 13 * * *"    # 每天 13:00 全用户仿写
+    ...
+
+users:                            # 用户只填差异字段
+  - id: alice
+    name: "RSU 中文服务"
+    wechat:
+      app_id:     "wx..."
+      app_secret: "..."
+```
+
+`get_user(config, user_id)` 自动深度合并 `_default_user` + 用户记录；`xhs.display_name` 派生自 `name`。
+
+**写文件保留注释**：用 `ruamel.yaml`（不是 `yaml.safe_dump`）。
+关键设置：`_ruamel.allow_unicode = True`，否则中文被转义成 `\xXX` 看着像乱码。
+
+**端点**（`publisher_hub/routes/users.py`）：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET  | `/users/new` | 渲染新增表单 modal |
+| POST | `/users` | 创建用户 → 写 yaml → reload → `HX-Redirect: /` |
+| GET  | `/users/{id}/edit` | 编辑表单（user_id readonly，app_secret 留空保持不变） |
+| POST | `/users/{id}` | 更新（部分字段可空） |
+| POST | `/users/{id}/delete` | 删除条目（不动 hub_drafts；同 ID 重建可恢复草稿） |
+
+**注册顺序**：`users.router` 必须**先于** `home.router`，否则 `/{user_id}` 通配会拦截 `/users/...`。
+
+**user_id 校验**：`^[a-z0-9_-]{1,32}$`，且不能 `_` 开头（保留给系统配置）。
+
+**热加载**：`reload_app_state(app)` 写完 yaml 后调用，仅替换 `app.state.config / prompts`，
+单 worker uvicorn 进程内即时生效；正在执行的请求不受影响。
+
+**前端**：
+- 首页右上角 `+ 新增用户` 按钮（HTMX `hx-get="/users/new"` `hx-target="#modal-area"`）
+- 每张用户卡片右上角 ✏️/🗑 按钮
+- modal 表单顶部红色 IP 白名单提示：`47.236.168.208`
+- 表单含 `hx-disabled-elt="this"` 防双击 + spinner
+
+**坑（已记）**：
+- curl `-d` 不 urlencode 中文导致 latin-1 解码乱码 → 用 `--data-urlencode` 或浏览器 form 提交（标准 UTF-8 percent-encode）。
+- ruamel.yaml 默认 `allow_unicode=False` 把非 ASCII 转成 `\xXX` 看像 mojibake。
+
 ### 2026-05-07 — 失败状态可重试
 
 **问题**：推送失败 `mark_failed` 后，模板里 `{% if d.status == 'ready' %}` 不再显示按钮，
