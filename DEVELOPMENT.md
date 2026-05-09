@@ -775,6 +775,51 @@ users:                            # 用户只填差异字段
 - curl `-d` 不 urlencode 中文导致 latin-1 解码乱码 → 用 `--data-urlencode` 或浏览器 form 提交（标准 UTF-8 percent-encode）。
 - ruamel.yaml 默认 `allow_unicode=False` 把非 ASCII 转成 `\xXX` 看像 mojibake。
 
+### 2026-05-09 — Phase 4 完成 ✓ 定时调度
+
+**触发**：每天 **08:00 Asia/Shanghai**（一个 cron 跑全部）
+
+**daily_run 流程**（`publisher_hub/scheduler.py`）：
+```
+for user in list_users(config):
+  ┌─ wechat 阶段 ──────────────────────────────────
+  │ 1. RewriteEngine.run_user(uid, 'wechat')       → 仿写 N 篇（默认 batch=10→2 篇）
+  │ 2. 取所有 status='ready' 的 wechat 草稿
+  │ 3. WeChatPublisher.push 推到草稿箱（永久素材封面+内嵌图+md→html+digest）
+  │ 4. mark_pushed + FeishuBot.push_success
+  │   → 飞书卡片 "alice 公众号草稿: media_id xxx，进 mp.weixin.qq.com 手动群发"
+  └─ xhs 阶段 ─────────────────────────────────────
+    1. RewriteEngine.run_user(uid, 'xhs')           → 仿写 N 条（默认 2 条）
+    2. 取所有 status='ready' 的 xhs 草稿
+    3. XhsPublisher.push（myaibot /publish 1 次扣费）
+    4. 二维码 base64 写入 hub_drafts.pushed_result
+    5. FeishuBot.push_success
+      → 飞书卡片 "alice 小红书二维码已生成: https://...，及时扫码"
+```
+
+**实现细节**：
+- 用 `BackgroundScheduler`（独立线程跑）而不是 `AsyncIOScheduler`，避免阻塞 FastAPI event loop
+- `_run_lock = threading.Lock()` 防重入：上一轮还在跑下一轮就 skip
+- `misfire_grace_time=3600`：服务重启时若错过几小时内的触发会补跑一次
+- 单用户单平台失败不影响其它（每段 try/except）
+- wechat 推送后 db.mark_pushed(media_id)；xhs 写 `{"qr_url": "data:image/png;base64,..."}`
+
+**Admin 端点**（`publisher_hub/routes/admin.py`）：
+| 路径 | 用途 |
+|---|---|
+| `POST /admin/run-now` body `user_id=xxx` | 立即触发 daily_run（后台线程，可指定单用户）|
+| `GET /admin/scheduler-status` | 看 cron + next_run_time |
+
+**默认值改动**（`_HARDCODED_DEFAULTS` + yaml `_default_user`）：
+- `xhs.sources.categories: []` —— 空=不限制 category，所有 xhs/douyin posts 都可仿（fxj 实测可仿写 999+）
+- `xhs.rewrite_cron: '0 8 * * *'` —— 与 wechat 同 cron 一起跑
+- 删除 `push_cron` 字段（推送随仿写一起跑，不分两个 cron）
+
+**测试方式**：
+- 等明早 8:00 自动触发
+- 或 `curl -X POST http://47.236.168.208:8900/admin/run-now -d "user_id=fxj"`
+- 进度看 `journalctl -u publisher-hub -f`
+
 ### 2026-05-07 — 失败状态可重试
 
 **问题**：推送失败 `mark_failed` 后，模板里 `{% if d.status == 'ready' %}` 不再显示按钮，
