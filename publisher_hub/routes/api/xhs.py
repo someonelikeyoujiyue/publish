@@ -10,6 +10,7 @@ from ...config import get_user
 from ...feishu import FeishuBot
 from ...rewrite import RewriteEngine
 from ...xhs import XhsPublisher
+from ._helpers import parse_images
 
 log = logging.getLogger('publisher_hub.api.xhs')
 router = APIRouter()
@@ -17,6 +18,7 @@ PLATFORM = 'xhs'
 
 
 def _draft_summary(d: dict) -> dict:
+    images = parse_images(d.get('image_urls') or '')
     return {
         'id':         d['id'],
         'title':      d.get('title') or '',
@@ -24,6 +26,8 @@ def _draft_summary(d: dict) -> dict:
         'created_at': str(d.get('created_at') or ''),
         'pushed_at':  str(d.get('pushed_at') or '') if d.get('pushed_at') else None,
         'error':      d.get('error_msg') or None,
+        'cover':      images[0] if images else '',
+        'image_count': len(images),
     }
 
 
@@ -46,7 +50,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
     draft = db.get_draft(draft_id)
     if not draft or draft['user_id'] != user_id or draft['platform'] != PLATFORM:
         raise HTTPException(404)
-    images = [u.strip() for u in (draft.get('image_urls') or '').split(',') if u.strip()]
+    images = parse_images(draft.get('image_urls') or '')
     qr_url = ''
     if draft.get('status') == 'pushed' and draft.get('pushed_result'):
         try:

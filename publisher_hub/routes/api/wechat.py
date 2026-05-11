@@ -10,6 +10,7 @@ from ...config import get_user
 from ...feishu import FeishuBot
 from ...rewrite import RewriteEngine
 from ...wechat import WeChatPublisher
+from ._helpers import parse_images
 
 log = logging.getLogger('publisher_hub.api.wechat')
 router = APIRouter()
@@ -17,6 +18,7 @@ PLATFORM = 'wechat'
 
 
 def _draft_summary(d: dict) -> dict:
+    images = parse_images(d.get('image_urls') or '')
     return {
         'id':         d['id'],
         'title':      d.get('title') or '',
@@ -24,6 +26,9 @@ def _draft_summary(d: dict) -> dict:
         'created_at': str(d.get('created_at') or ''),
         'pushed_at':  str(d.get('pushed_at') or '') if d.get('pushed_at') else None,
         'error':      d.get('error_msg') or None,
+        # 列表卡片要展示缩略图，输出前 3 张就够
+        'cover':      images[0] if images else '',
+        'image_count': len(images),
     }
 
 
@@ -50,7 +55,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
         draft.get('content') or '',
         extras=['fenced-code-blocks', 'tables', 'break-on-newline', 'cuddled-lists'],
     )
-    images = [u.strip() for u in (draft.get('image_urls') or '').split(',') if u.strip()]
+    images = parse_images(draft.get('image_urls') or '')
     return {
         'id':           draft['id'],
         'title':        draft.get('title') or '',
