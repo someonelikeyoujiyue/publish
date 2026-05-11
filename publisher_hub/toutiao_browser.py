@@ -181,7 +181,7 @@ class ToutiaoBrowser:
 
             # 等 url 稳定（SPA redirect 可能需要 3-5 秒）
             last_url = ''
-            for _ in range(8):
+            for _ in range(10):
                 await asyncio.sleep(1)
                 cur = page.url
                 if cur and cur == last_url:
@@ -191,6 +191,26 @@ class ToutiaoBrowser:
 
             if any(k in url for k in ('sso.', 'passport.', '/login', 'auth/')):
                 return {'status': 'logged_out', 'url': url}
+
+            # 正向判定：已登录必有 session 类 cookie，否则即便 url 看起来 OK 也是未登录
+            cookies = await ctx.cookies()
+            cookie_names = {c.get('name', '').lower() for c in cookies}
+            session_cookies = {'sessionid', 'sid_tt', 'sid_guard', 'uid_tt',
+                               'uid_tt_ss', 'sid_ucp_v1', 'ssid_ucp_v1'}
+            if not (cookie_names & session_cookies):
+                # body 文本兜底确认（防止误杀）
+                try:
+                    body_text = await page.evaluate(
+                        'document.body && document.body.innerText.slice(0, 500) || ""'
+                    )
+                except Exception:
+                    body_text = ''
+                if any(k in body_text for k in ('扫码登录', '获取验证码', '验证码登录', '注册')):
+                    return {'status': 'logged_out', 'url': url,
+                            'reason': 'no_session_cookie+login_body'}
+                # 没 session cookie 但也没登录页文本 → 仍判 logged_out（保守）
+                return {'status': 'logged_out', 'url': url,
+                        'reason': 'no_session_cookie'}
 
             # 提取用户名：DOM 多 selector 尝试 + cookie 兜底
             name = ''
@@ -212,7 +232,6 @@ class ToutiaoBrowser:
                 except Exception:
                     pass
 
-            cookies = await ctx.cookies()
             # 从 cookie 兜底拿 name（头条号常存 nickname 类 cookie）
             if not name:
                 for c in cookies:
@@ -290,19 +309,28 @@ class ToutiaoBrowser:
                 log.warning('[toutiao] %s goto 失败: %s', self.user_id, e)
                 return None
 
-            await asyncio.sleep(2)
-            url_now = page.url
-            log.info('[toutiao] %s after 2s url=%s', self.user_id, url_now)
+            # 等 url 稳定（最多 8s），同时为 cookie 写入留时间
+            last_url = ''
+            for _ in range(8):
+                await asyncio.sleep(1)
+                cur = page.url
+                if cur and cur == last_url:
+                    break
+                last_url = cur
+            url_now = last_url
+            log.info('[toutiao] %s after settle url=%s', self.user_id, url_now)
 
-            # 已登录 → 跳到 dashboard（含 profile_v4 等），别浪费时间截 dashboard
-            if 'mp.toutiao.com' in url_now and not any(k in url_now for k in ('sso.', 'passport.', '/login', 'auth/')):
-                if 'profile_v4' in url_now or 'mp.toutiao.com/' != url_now and 'home' in url_now or url_now.endswith('mp.toutiao.com/profile_v4/'):
-                    log.info('[toutiao] %s 已登录 (%s)，不需扫码', self.user_id, url_now)
-                    return self.ALREADY_LOGGED_IN
-                # 兜底：URL 在 mp.toutiao.com 域内但不像登录页 → 也当已登录
-                if '/login' not in url_now and 'sso' not in url_now:
-                    log.info('[toutiao] %s 看起来已登录 (%s)，跳过截图', self.user_id, url_now)
-                    return self.ALREADY_LOGGED_IN
+            # 已登录判定：必须有 session 类 cookie，否则即便 url 显示 dashboard 也按未登录处理
+            cookies = await ctx.cookies()
+            cookie_names = {c.get('name', '').lower() for c in cookies}
+            session_cookies = {'sessionid', 'sid_tt', 'sid_guard', 'uid_tt',
+                               'uid_tt_ss', 'sid_ucp_v1', 'ssid_ucp_v1'}
+            if (cookie_names & session_cookies) and not any(
+                k in url_now for k in ('sso.', 'passport.', '/login', 'auth/')
+            ):
+                log.info('[toutiao] %s 已登录 (cookie ok, url=%s)，跳过截图',
+                         self.user_id, url_now)
+                return self.ALREADY_LOGGED_IN
 
             # 等二维码元素
             try:
