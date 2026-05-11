@@ -133,6 +133,9 @@ class RewriteEngine:
             final_imgs = self.collect_images_for_draft(
                 post_imgs, category=post.get('category', ''),
             )
+            # 头条号微头条只配 1 张图（多了上传慢、用户体验也不好）
+            if platform == 'toutiao':
+                final_imgs = final_imgs[:1]
             db.save_draft(
                 user_id        = user_id,
                 platform       = platform,

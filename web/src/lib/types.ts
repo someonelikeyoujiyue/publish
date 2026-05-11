@@ -6,6 +6,7 @@ export interface User {
   toutiao: { cdp_port?: number }
   wechat_count: number
   xhs_count: number
+  toutiao_count: number
 }
 
 export type Platform = 'wechat' | 'xhs' | 'toutiao'

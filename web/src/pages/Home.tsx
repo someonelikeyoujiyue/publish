@@ -35,7 +35,7 @@ export function Home() {
               <div className="flex gap-3 p-3 bg-slate-50 rounded-md mb-4">
                 <Stat label="📰 公众号" n={u.wechat_count} />
                 <Stat label="🌹 小红书" n={u.xhs_count} />
-                <Stat label="📱 头条号" n={u.toutiao.cdp_port ? '已绑' : '—'} />
+                <Stat label="📱 头条号" n={u.toutiao_count} />
               </div>
 
               <div className="flex gap-2">

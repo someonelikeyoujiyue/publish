@@ -49,8 +49,10 @@ def _serialize_user(u: dict, db) -> dict:
             # 只出口端口号，不出口 user_data_dir / cookie 之类
             'cdp_port': tt.get('cdp_port'),
         },
-        'wechat_count': len(db.list_drafts(u['id'], platform='wechat', status='ready', limit=999)),
-        'xhs_count':    len(db.list_drafts(u['id'], platform='xhs',    status='ready', limit=999)),
+        # 草稿总数（不区分 ready/pushed/failed），用于 sidebar/tab/卡片显示
+        'wechat_count':  len(db.list_drafts(u['id'], platform='wechat',  status=None, limit=999)),
+        'xhs_count':     len(db.list_drafts(u['id'], platform='xhs',     status=None, limit=999)),
+        'toutiao_count': len(db.list_drafts(u['id'], platform='toutiao', status=None, limit=999)),
     }
 
 
