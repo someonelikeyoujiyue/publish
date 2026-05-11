@@ -24,7 +24,14 @@ PUBLISH_URL = 'https://mp.toutiao.com/profile_v4/weitoutiao/publish'
 
 
 def _download_images(urls: list[str], max_count: int = 9) -> list[str]:
-    """同步下载远程图片到 /tmp，返回本地路径列表。微头条最多 9 张图。"""
+    """同步下载远程图片到 /tmp，压缩后返回本地路径列表。
+
+    RSU 兜底图原图可达 19MB（4K+ 像素）—— set_input_files 等待上传 ack
+    会超时（30s 仍未完成）。这里下载后用 PIL thumbnail 到 2000px + JPEG q85，
+    单张通常压到 < 500KB。微头条最多 9 张图。
+    """
+    from PIL import Image
+
     paths: list[str] = []
     tmpdir = tempfile.mkdtemp(prefix='toutiao_upload_')
     for i, raw in enumerate(urls[:max_count]):
@@ -32,14 +39,21 @@ def _download_images(urls: list[str], max_count: int = 9) -> list[str]:
         if not url:
             continue
         try:
-            ext = os.path.splitext(url.split('?')[0])[1] or '.jpg'
-            if len(ext) > 5:
-                ext = '.jpg'
-            p = os.path.join(tmpdir, f'img{i:02d}{ext}')
-            urllib.request.urlretrieve(url, p)
-            paths.append(p)
+            raw_path = os.path.join(tmpdir, f'raw{i:02d}')
+            urllib.request.urlretrieve(url, raw_path)
+            raw_size = os.path.getsize(raw_path) / 1024
+            img = Image.open(raw_path)
+            img.thumbnail((2000, 2000), Image.LANCZOS)
+            if img.mode in ('RGBA', 'P', 'LA'):
+                img = img.convert('RGB')
+            out = os.path.join(tmpdir, f'img{i:02d}.jpg')
+            img.save(out, 'JPEG', quality=85, optimize=True)
+            os.unlink(raw_path)
+            out_size = os.path.getsize(out) / 1024
+            log.info('[toutiao_publisher] 图片 %d: %.0fKB → %.0fKB', i, raw_size, out_size)
+            paths.append(out)
         except Exception as e:
-            log.warning('[toutiao_publisher] 下载图片失败 %s: %s', url, e)
+            log.warning('[toutiao_publisher] 下载/压缩图片失败 %s: %s', url, e)
     return paths
 
 
@@ -139,15 +153,18 @@ async def publish_weitoutiao(
                   if (img) img.click();
                 }""")
                 await asyncio.sleep(0.5)
-                # 拿到生成的 file input
-                file_input = await page.query_selector('input[type=file][accept^="image"]')
-                if not file_input:
-                    log.warning('[toutiao_publisher] %s 没生成 file input，跳过图片上传', browser.user_id)
-                else:
-                    await file_input.set_input_files(image_paths)
+                # 用 page.set_input_files（比 ElementHandle 更鲁棒，内部会重试 selector）
+                try:
+                    await page.set_input_files(
+                        'input[type=file][accept^="image"]',
+                        image_paths,
+                        timeout=10_000,
+                    )
                     log.info('[toutiao_publisher] %s 已 setInputFiles %d 张', browser.user_id, len(image_paths))
                     # 等图片上传完成。头条号上传一张约 1-3s，给宽限到每张 3s + 2s 兜底
                     await asyncio.sleep(min(len(image_paths) * 3 + 2, 30))
+                except Exception as e:
+                    log.warning('[toutiao_publisher] %s setInputFiles 失败: %s', browser.user_id, e)
             except Exception as e:
                 log.warning('[toutiao_publisher] %s 图片上传异常（继续发布）: %s', browser.user_id, e)
 
