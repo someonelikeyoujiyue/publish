@@ -39,10 +39,10 @@ export const api = {
     req<{ ok: boolean; new_count?: number; error?: string }>(
       `/users/${userId}/${platform}/refresh`, { method: 'POST', body: '{}' },
     ),
-  push: (userId: string, platform: Platform, id: number) =>
-    req<{ ok: boolean; media_id?: string; qr_url?: string; error?: string }>(
+  push: (userId: string, platform: Platform, id: number, opts: { draft_only?: boolean } = {}) =>
+    req<{ ok: boolean; media_id?: string; qr_url?: string; error?: string; final_url?: string; mode?: string }>(
       `/users/${userId}/${platform}/drafts/${id}/push`,
-      { method: 'POST', body: '{}' },
+      { method: 'POST', body: JSON.stringify(opts) },
     ),
 
   // toutiao

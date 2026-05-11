@@ -8,8 +8,12 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ... import config as cfg
 from ...config import get_user
 from ...rewrite import RewriteEngine
+from ...toutiao_browser import get_browser
+from ...toutiao_publisher import publish_weitoutiao
+from ...feishu import FeishuBot
 from ._helpers import parse_images
 
 log = logging.getLogger('publisher_hub.api.toutiao_drafts')
@@ -81,9 +85,50 @@ def refresh(user_id: str, request: Request):
 
 
 @router.post('/users/{user_id}/toutiao/drafts/{draft_id}/push')
-def push(user_id: str, draft_id: int, request: Request):
-    """Step 2 待实现：通过 CDP 操作 dashboard DOM 发布微头条。"""
-    return {
-        'ok': False,
-        'error': '微头条发布尚未实现（Step 2 开发中）。当前只能仿写 + 查看草稿。',
-    }
+async def push(user_id: str, draft_id: int, request: Request):
+    """走 CDP 自动发布微头条。需要用户已扫码绑定头条号。
+
+    body 可选 {"draft_only": true} 只存草稿不发布。
+    """
+    config = request.app.state.config
+    db     = request.app.state.db
+    user   = get_user(config, user_id)
+    if not user:
+        raise HTTPException(404)
+    draft = db.get_draft(draft_id)
+    if not draft or draft['user_id'] != user_id or draft['platform'] != PLATFORM:
+        raise HTTPException(404)
+
+    port = ((cfg.get_user_raw(config, user_id) or {}).get('toutiao') or {}).get('cdp_port')
+    if not port:
+        return {'ok': False, 'error': '未绑定头条号，请先去「头条号」tab 扫码登录'}
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    draft_only = bool(body.get('draft_only', False))
+
+    title   = draft.get('title') or ''
+    content = draft.get('content') or ''
+
+    browser = get_browser(user_id, int(port))
+    result = await publish_weitoutiao(browser, title, content, save_draft_only=draft_only)
+
+    bot = FeishuBot(config)
+    user_name = user.get('name') or user_id
+
+    if result.get('ok'):
+        mode = result.get('mode', 'publish')
+        db.mark_pushed(draft_id, pushed_result=f'mode={mode} url={result.get("final_url","")}')
+        bot.push_success(user_name, PLATFORM, title or '(无标题)',
+                         f'已{("存草稿" if mode == "draft" else "发布")}：{result.get("final_url","")}')
+        log.info('[api/toutiao_drafts] ✓ push user=%s draft=%s mode=%s',
+                 user_id, draft_id, mode)
+        return result
+
+    err = result.get('error', '未知错误')
+    db.mark_failed(draft_id, error_msg=err)
+    bot.push_failed(user_name, PLATFORM, title or '(无标题)', err)
+    log.warning('[api/toutiao_drafts] ✗ push user=%s draft=%s: %s', user_id, draft_id, err)
+    return result

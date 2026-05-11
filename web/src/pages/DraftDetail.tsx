@@ -6,17 +6,27 @@ import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
 
 const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条' } as const
+const WEITT_PUBLISH_URL = 'https://mp.toutiao.com/profile_v4/weitoutiao/publish'
 
 export function DraftDetail({ platform }: { platform: Platform }) {
   const { userId = '', draftId = '' } = useParams()
   const qc = useQueryClient()
   const id = Number(draftId)
   const [lightbox, setLightbox] = useState<string | null>(null)
+  const [copied, setCopied] = useState<'' | 'all' | 'title' | 'body'>('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['draft', userId, platform, id],
     queryFn: () => api.getDraft(userId, platform, id),
     enabled: !!userId && !!id,
+  })
+
+  // 头条号已绑定 + 在线状态（只在 toutiao 平台用）
+  const { data: ttStatus } = useQuery({
+    queryKey: ['toutiao', userId],
+    queryFn: () => api.toutiaoStatus(userId),
+    enabled: platform === 'toutiao' && !!userId,
+    refetchInterval: 15_000,
   })
 
   const push = useMutation({
@@ -26,6 +36,28 @@ export function DraftDetail({ platform }: { platform: Platform }) {
       qc.invalidateQueries({ queryKey: ['drafts', userId, platform] })
     },
   })
+
+  const saveDraftOnly = useMutation({
+    mutationFn: () => api.push(userId, platform, id, { draft_only: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['draft', userId, platform, id] })
+      qc.invalidateQueries({ queryKey: ['drafts', userId, platform] })
+    },
+  })
+
+  const copyTo = async (kind: 'all' | 'title' | 'body') => {
+    if (!data) return
+    const text = kind === 'title' ? data.title
+      : kind === 'body' ? data.content
+      : `${data.title}\n\n${data.content}`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(kind)
+      setTimeout(() => setCopied(''), 2000)
+    } catch (e) {
+      alert('复制失败：' + (e as Error).message)
+    }
+  }
 
   if (isLoading) return <p className="text-slate-500">加载中…</p>
   if (!data) return <p className="text-slate-500">草稿不存在</p>
@@ -92,39 +124,132 @@ export function DraftDetail({ platform }: { platform: Platform }) {
           <div className="bg-white rounded-lg border border-slate-200 p-5 sticky top-32">
             <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-3 font-medium">操作</div>
 
-            {canPush ? (
-              <Btn
-                className="w-full justify-center"
-                onClick={() => push.mutate()}
-                loading={push.isPending}
-              >
-                {push.isPending
-                  ? (platform === 'wechat' ? '推送中…' : '生成二维码中…')
-                  : (platform === 'wechat' ? '📤 推送到公众号草稿箱' : '🌹 生成小红书发布二维码')}
-              </Btn>
-            ) : (
-              <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
-                ✓ 已推送
-              </div>
-            )}
+            {/* ── 微头条：手动 + 自动 两种发布 ─────────────────────────── */}
+            {platform === 'toutiao' ? (
+              <div className="space-y-3">
+                {/* 状态 */}
+                <div className="text-[12px] text-slate-500 pb-2 border-b border-slate-100">
+                  状态：
+                  {data.status === 'pushed' ? <span className="text-emerald-700">✓ 已发布</span>
+                    : data.status === 'failed' ? <span className="text-red-700">✗ 失败</span>
+                    : <span className="text-amber-700">待发</span>}
+                </div>
 
-            {push.data?.ok === false && (
-              <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
-                ✗ {push.data.error}
+                {/* 手动模式 */}
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 mb-2">📋 手动发（推荐）</div>
+                  <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                    复制内容 → 跳到头条发布页 → 在已登录的浏览器粘贴
+                  </p>
+                  <div className="space-y-1.5">
+                    <Btn
+                      variant="primary"
+                      className="w-full justify-center"
+                      onClick={async () => {
+                        await copyTo('all')
+                        window.open(WEITT_PUBLISH_URL, '_blank', 'noopener')
+                      }}
+                    >
+                      📋 复制 + 打开发布页
+                    </Btn>
+                    <div className="flex gap-1.5">
+                      <Btn variant="ghost" className="flex-1 !text-xs !py-1" onClick={() => copyTo('title')}>
+                        {copied === 'title' ? '✓ 已复制' : '只复制标题'}
+                      </Btn>
+                      <Btn variant="ghost" className="flex-1 !text-xs !py-1" onClick={() => copyTo('body')}>
+                        {copied === 'body' ? '✓ 已复制' : '只复制正文'}
+                      </Btn>
+                    </div>
+                    {copied === 'all' && (
+                      <div className="text-[11px] text-emerald-700">✓ 已复制（标题 + 空行 + 正文）</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-100 pt-3">
+                  <div className="text-xs font-semibold text-slate-700 mb-2">🚀 自动发（需绑定）</div>
+                  {ttStatus?.status === 'logged_in' ? (
+                    <>
+                      <p className="text-[11px] text-slate-500 mb-2">
+                        ✓ 已登录{ttStatus.name && `（${ttStatus.name}）`}，可直接调用浏览器发布
+                      </p>
+                      <div className="space-y-1.5">
+                        <Btn
+                          className="w-full justify-center"
+                          onClick={() => {
+                            if (confirm('确认直接发布到头条号？发布后无法撤回。')) push.mutate()
+                          }}
+                          loading={push.isPending}
+                        >
+                          {push.isPending ? '发布中…（约 30s）' : '🚀 立即发布'}
+                        </Btn>
+                        <Btn
+                          variant="secondary"
+                          className="w-full justify-center !text-xs"
+                          onClick={() => saveDraftOnly.mutate()}
+                          loading={saveDraftOnly.isPending}
+                        >
+                          {saveDraftOnly.isPending ? '存草稿中…' : '📥 仅存草稿（不发布）'}
+                        </Btn>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      未绑定头条号，<Link to={`/${userId}/toutiao`} className="underline">去扫码 →</Link>
+                    </p>
+                  )}
+                </div>
+
+                {(push.data?.ok === false || saveDraftOnly.data?.ok === false) && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                    ✗ {push.data?.error || saveDraftOnly.data?.error}
+                  </div>
+                )}
+                {push.data?.ok && (
+                  <div className="text-xs text-emerald-700">✓ 已发布</div>
+                )}
+                {saveDraftOnly.data?.ok && (
+                  <div className="text-xs text-emerald-700">✓ 已存草稿，去头条号后台手动审核发布</div>
+                )}
               </div>
-            )}
-            {push.data?.ok && platform === 'wechat' && (
-              <div className="mt-3 text-xs text-emerald-700">
-                ✓ 已推送到{' '}
-                <a href="https://mp.weixin.qq.com" target="_blank" className="underline">公众号后台</a>
-                <div className="text-slate-400 mt-1 font-mono break-all">media_id: {push.data.media_id}</div>
-              </div>
-            )}
-            {qrUrl && platform === 'xhs' && (
-              <div className="mt-4">
-                <div className="text-xs text-emerald-700 mb-2">✓ 用手机扫码发布</div>
-                <img src={qrUrl} alt="发布二维码" className="w-full border border-slate-200 rounded bg-white" />
-              </div>
+            ) : (
+              /* ── 公众号 / 小红书：保持原行为 ───────────────────────── */
+              <>
+                {canPush ? (
+                  <Btn
+                    className="w-full justify-center"
+                    onClick={() => push.mutate()}
+                    loading={push.isPending}
+                  >
+                    {push.isPending
+                      ? (platform === 'wechat' ? '推送中…' : '生成二维码中…')
+                      : (platform === 'wechat' ? '📤 推送到公众号草稿箱' : '🌹 生成小红书发布二维码')}
+                  </Btn>
+                ) : (
+                  <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+                    ✓ 已推送
+                  </div>
+                )}
+
+                {push.data?.ok === false && (
+                  <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                    ✗ {push.data.error}
+                  </div>
+                )}
+                {push.data?.ok && platform === 'wechat' && (
+                  <div className="mt-3 text-xs text-emerald-700">
+                    ✓ 已推送到{' '}
+                    <a href="https://mp.weixin.qq.com" target="_blank" className="underline">公众号后台</a>
+                    <div className="text-slate-400 mt-1 font-mono break-all">media_id: {push.data.media_id}</div>
+                  </div>
+                )}
+                {qrUrl && platform === 'xhs' && (
+                  <div className="mt-4">
+                    <div className="text-xs text-emerald-700 mb-2">✓ 用手机扫码发布</div>
+                    <img src={qrUrl} alt="发布二维码" className="w-full border border-slate-200 rounded bg-white" />
+                  </div>
+                )}
+              </>
             )}
           </div>
         </aside>
