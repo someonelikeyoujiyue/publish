@@ -842,6 +842,128 @@ for user in list_users(config):
 - 此时 `_collect_images` 走 cover_url CDN（兜底），但更多情况下原帖图就是少
 - `collect_images_for_draft` 会用 RSU 补到 `min_images=4` 张，保证微信草稿和小红书都有图发
 
+### 2026-05-09 — 仿写素材选择策略
+
+之前**最新优先**：`ORDER BY discovered_at DESC LIMIT N` 容易扎堆同一时段抓的内容。
+
+**新策略（写在 `db.get_posts_for_user(pick_strategy=...)`，配置在 `_HARDCODED_DEFAULTS`）**：
+
+| 平台 | 策略 | 实现 |
+|---|---|---|
+| **xhs** | `random` —— 全池 ORDER BY RAND() | fxj 池 999+ 条多样性最佳 |
+| **wechat** | `recent_random` —— 最近 50 条池 → Python `random.sample` 抽 10 | 既保证新鲜又有多样性 |
+| 默认 | `latest` | 兼容旧行为 |
+
+`LEFT JOIN hub_drafts ... d.id IS NULL` 始终生效，所有策略都自动去重已仿写过的。
+
+### 2026-05-11 — XHS 改用真实素材图（识图 5 选 2，取消 wan 生图）
+
+**动机**：用户反馈"AI 生图勉强可用但希望根据原帖图和文字"。后来发现 wan 生图：
+- valueclue 上能识图的只有 `qwen3.6-plus`（实测 8.8s/张，gemini/claude 都 401 没权限）
+- wan2.7 / qwen-image-2.0 / qwen-image-2.0-pro 都是 image-only 生图模型，不识图
+- AI 图加噪声仍可能被平台识别
+
+**改成"识图 5 选 2 真实素材"**：
+
+```
+每篇 xhs 笔记独立流程（_per_post_xhs，每篇并行跑）：
+  1. 全池随机抽 candidate_pool=5 个 posts（"每篇各自抽 5 个"）
+  2. 识图 5 张候选（命中 newmedia.posts.cover_image_desc 缓存跳过）
+  3. LLM 一次决策选 2 张最合适的（评分：画面具体/视觉吸引力/契合主题）
+  4. 仿写主素材 = 选中 2 张图对应 posts 的第 1 个
+  5. image_urls = 选中的 2 张真实图
+```
+
+**关键数据**：
+- 取数：`batch * candidate_pool = 2 * 5 = 10` 个 posts 一次 db 查询，按顺序拆 2 组
+- 仿写主素材去重：`already_main` set 防同一 post 用作两篇主素材
+- 识图缓存：写回 `newmedia.posts.cover_image_desc`（已有字段），永久复用
+
+**时间**：首次 ~4.5 分钟（10 张识图 + 2 次 LLM 选 + 2 次仿写），缓存命中后 ~2 分钟。
+
+### 2026-05-11 — Phase 1 头条号扫码绑定
+
+**目标**：每个 publisher-hub 用户绑定自己的头条号；前端能看登录状态、过期了能扫码重绑。
+本期**只做绑定**，不接推送（DOM 自动填表 + 草稿提交是 Phase 2）。
+
+**架构**：
+
+```
+用户访问 /{uid}/toutiao
+  ↓
+toutiao_panel.html: tabs + 状态卡（HTMX 15s 轮询 /status）+ 扫码按钮
+  ↓ 点扫码
+POST /{uid}/toutiao/bind:
+  ├─ 没分配端口 → allocate_port(9230+) → 写 user.toutiao.cdp_port + reload
+  ├─ get_browser(uid, port) → ToutiaoBrowser 实例
+  ├─ start() 启 Chrome 子进程（headless + user_data_dir 持久化）
+  ├─ playwright.async_api connect_over_cdp
+  ├─ page.goto mp.toutiao.com → wait 3s → screenshot 整页 PNG
+  └─ 返回 base64 给前端 modal 展示
+  ↓ 用户手机扫码
+Chrome session 拿到 cookie，写入 user_data_dir
+  ↓ HTMX 15s 后下次 status 轮询
+GET /{uid}/toutiao/status → check_login:
+  ├─ 30s 缓存命中 → 直接返
+  ├─ page.goto mp.toutiao.com（wait_until='commit' 30s timeout）
+  ├─ 看 url 是否含 sso/login → logged_in / logged_out
+  └─ 提取用户名 + cookie 过期天数
+```
+
+**关键设计**：
+
+| 维度 | 选择 | 原因 |
+|---|---|---|
+| Chrome 路径 | `/root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome` | 复用 newmedia 已装的 playwright bundled chromium，不需要额外安装 |
+| Chrome args | `--headless=new --no-sandbox --use-angle=swiftshader-webgl` 等 | 抄 newmedia/weidian 验证过的稳定 args |
+| 用户数据目录 | `/data/publisher-hub/chrome/toutiao-<user_id>/` | 持久化 cookie；解绑时 rmtree |
+| CDP 端口 | 9230 起步自动分配 | 避开 newmedia 占用的 9222-9225 + weidian 9224 |
+| 端口持久化 | 写 `user.toutiao.cdp_port` 到 yaml | 重启服务后端口分配不变 |
+| Playwright 模式 | **`async_playwright`** | `sync_playwright` 在 FastAPI 重复调用会污染 ContextManager 状态 |
+| 状态轮询缓存 | 30s TTL | HTMX 15s 一次轮询，30s 缓存让多个 tab 共享结果 |
+| 二维码呈现 | 整页 screenshot（不识别 QR canvas selector） | 头条号 UI 可能改版，整页截图最稳，用户能在图里找到二维码 |
+
+**踩过的坑**（按时序）：
+
+#### 坑 1：page.goto 超时 15s
+- 现象：扫码过期后再点按钮，等很久返回 `Page.goto: Timeout 15000ms exceeded`
+- 根因：每次 HTMX 5s 轮询都 `page.goto`，headless Chrome 加载头条号偶尔需要 30s+
+- 修复：timeout 提到 30s + `wait_until='commit'`（响应头收到即返回，不等资源）
+
+#### 坑 2：HTMX 5s 轮询过载
+- 现象：上一次 `page.goto` 还没返回下一次又触发，多个 goto 并发冲突
+- 修复：
+  - HTMX 轮询频率 5s → **15s**
+  - `check_login` 加 **30s 内存缓存**（同 ToutiaoBrowser 实例复用结果）
+  - `bind` 后调 `invalidate_cache()` 让用户扫完码后能尽快变绿
+
+#### 坑 3：`PlaywrightContextManager has no _playwright`
+- 现象：多次点扫码后报这个内部错误，整个流程坏掉
+- 根因：`sync_playwright()` 在 FastAPI 同步路由里**重复调用**时 ContextManager 实例的内部 `_playwright` 属性没正确重置（playwright sync API 设计上不适合长 lifetime 进程多次实例化）
+- 修复：**全部改 `async_playwright` + 路由 `async def`**
+  - `_with_page_async(fn)`：async with → connect_over_cdp → await fn(page, ctx) → await close
+  - `check_login` / `capture_login_page` 改 async；`page.goto / ctx.cookies / el.inner_text` 全部 await
+  - `routes/toutiao.py`：`status / bind / unbind` 改 async def
+- 收益：每次 async with 创建独立 context，不会污染下一次；性能也更好（无重复 sync IPC 启动开销）
+
+**文件清单**：
+
+| 文件 | 用途 |
+|---|---|
+| `publisher_hub/toutiao_browser.py` | ToutiaoBrowser 类 + `get_browser` 缓存 + `allocate_port` |
+| `publisher_hub/routes/toutiao.py` | 3 endpoints（status / bind / unbind） |
+| `templates/toutiao_panel.html` | 主面板（tabs + 状态卡 + 按钮区） |
+| `templates/_toutiao_status.html` | 状态片段（HTMX 替换） |
+| `templates/_toutiao_qr.html` | 扫码 modal 内容 |
+| `templates/list.html` | 加第三个 tab `📱 今日头条` |
+| `publisher_hub/config.py` | `set_user_toutiao_port` / `unset_user_toutiao` |
+| `pyproject.toml` | `playwright>=1.45` |
+
+**待办（Phase 2）**：
+- DOM 自动填表写文章 → 保存草稿
+- 接入 daily_run（仿写完自动推到草稿箱 + 飞书通知）
+- cookie 7 天内过期自动飞书提醒"该重新扫码"
+
 ---
 
 ## 12. 后续可选扩展（不在本次范围）
