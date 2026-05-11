@@ -8,7 +8,7 @@ export interface User {
   xhs_count: number
 }
 
-export type Platform = 'wechat' | 'xhs'
+export type Platform = 'wechat' | 'xhs' | 'toutiao'
 
 export type DraftStatus = 'ready' | 'pushed' | 'failed'
 

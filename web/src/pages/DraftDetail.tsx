@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
 
-const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书' } as const
+const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条' } as const
 
 export function DraftDetail({ platform }: { platform: Platform }) {
   const { userId = '', draftId = '' } = useParams()

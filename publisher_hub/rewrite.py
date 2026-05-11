@@ -637,8 +637,8 @@ def main():
     )
     parser.add_argument('user_id', help='用户 ID（config.yaml 中定义）')
     parser.add_argument(
-        'platform', nargs='?', default=None, choices=['wechat', 'xhs'],
-        help='只跑某个平台；省略=该用户的两个平台都跑',
+        'platform', nargs='?', default=None, choices=['wechat', 'xhs', 'toutiao'],
+        help='只跑某个平台；省略=该用户的三个平台都跑',
     )
     parser.add_argument('--debug', action='store_true', help='输出 DEBUG 级别日志')
     args = parser.parse_args()
@@ -655,7 +655,7 @@ def main():
     db.connect()
 
     engine    = RewriteEngine(config, prompts)
-    platforms = [args.platform] if args.platform else ['wechat', 'xhs']
+    platforms = [args.platform] if args.platform else ['wechat', 'xhs', 'toutiao']
 
     total = 0
     for p in platforms:

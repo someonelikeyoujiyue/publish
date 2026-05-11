@@ -20,6 +20,7 @@ export function App() {
         <Route path="/:userId/xhs" element={<DraftList platform="xhs" />} />
         <Route path="/:userId/xhs/:draftId" element={<DraftDetail platform="xhs" />} />
         <Route path="/:userId/toutiao" element={<Toutiao />} />
+        <Route path="/:userId/toutiao/:draftId" element={<DraftDetail platform="toutiao" />} />
       </Route>
     </Routes>
   )

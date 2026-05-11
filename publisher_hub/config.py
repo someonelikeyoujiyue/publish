@@ -67,6 +67,21 @@ _HARDCODED_DEFAULTS = {
         'candidate_pool':    5,
         'rewrite_cron':      '0 8 * * *',
     },
+    'toutiao': {
+        # 微头条体裁：跟小红书同源（xiaohongshu/douyin），但只写文字、不生图
+        'sources': {
+            'platforms':  ['xiaohongshu', 'douyin'],
+            'categories': [],
+        },
+        'prompt':            'toutiao_weitt',
+        'rewrite_mode':      'per_post',
+        'rewrite_batch':     2,
+        'articles_per_batch': 0,
+        'pick_strategy':     'random',
+        # 不走候选池+识图（candidate_pool=0），直接随机抽 batch 条仿写
+        'candidate_pool':    0,
+        'rewrite_cron':      '0 8 * * *',
+    },
 }
 
 

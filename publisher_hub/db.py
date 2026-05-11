@@ -15,7 +15,7 @@ _HUB_DRAFTS_DDL = """
 CREATE TABLE IF NOT EXISTS hub_drafts (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     user_id         VARCHAR(50)  NOT NULL,
-    platform        ENUM('wechat','xhs') NOT NULL,
+    platform        ENUM('wechat','xhs','toutiao') NOT NULL,
     source_post_id  INT          NOT NULL,
     source_post_ids TEXT,
     title           TEXT,

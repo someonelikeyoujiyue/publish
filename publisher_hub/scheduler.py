@@ -88,6 +88,28 @@ def _process_user_wechat(user: dict, app):
     log.info('[cron] ✓ %s/wechat 推送成功 %d/%d', uid, pushed_ok, len(drafts))
 
 
+def _process_user_toutiao(user: dict, app):
+    """头条号微头条只仿写、不自动推。推送由用户在前端点按钮触发。"""
+    config  = app.state.config
+    prompts = app.state.prompts
+    db      = app.state.db
+    uid     = user['id']
+    name    = user.get('name') or uid
+
+    engine = RewriteEngine(config, prompts)
+    bot    = FeishuBot(config)
+
+    log.info('[cron] ▶ %s/toutiao 仿写...', uid)
+    try:
+        n = engine.run_user(uid, 'toutiao', db)
+    except Exception as e:
+        log.exception('[cron] %s/toutiao 仿写异常: %s', uid, e)
+        bot.push_failed(name, 'toutiao', '(仿写阶段)', str(e))
+        return
+
+    log.info('[cron] ✓ %s/toutiao 新增草稿 %d 条（不自动推送，等用户点按钮）', uid, n)
+
+
 def _process_user_xhs(user: dict, app):
     config  = app.state.config
     prompts = app.state.prompts
@@ -176,6 +198,11 @@ def daily_run(app, target_user_id: Optional[str] = None):
                 _process_user_xhs(user, app)
             except Exception as e:
                 log.exception('[cron] %s xhs 流程整体异常: %s', uid, e)
+
+            try:
+                _process_user_toutiao(user, app)
+            except Exception as e:
+                log.exception('[cron] %s toutiao 流程整体异常: %s', uid, e)
 
         log.info('[cron] ===== daily_run 结束 =====')
     finally:
