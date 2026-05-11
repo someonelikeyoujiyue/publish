@@ -91,6 +91,16 @@ async def bind(user_id: str, request: Request):
             f'✗ 启 Chrome 异常：{e}</div>',
         )
 
+    # 已登录用户点扫码 → 友好提示
+    from ..toutiao_browser import ToutiaoBrowser
+    if img_data == ToutiaoBrowser.ALREADY_LOGGED_IN:
+        return HTMLResponse(
+            '<div class="badge badge-pushed" style="padding:10px 14px;">'
+            '✓ 该 Chrome 实例已经登录头条号了，无需重新扫码。<br>'
+            '<span style="font-weight:normal;font-size:12px;">'
+            '如果要换头条号，先点 🗑 解绑 清除登录态再重新扫。</span></div>',
+        )
+
     if not img_data:
         return HTMLResponse(
             '<div class="badge badge-failed" style="padding:8px 12px;">'

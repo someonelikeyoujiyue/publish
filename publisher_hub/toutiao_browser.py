@@ -218,21 +218,26 @@ class ToutiaoBrowser:
         '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
     )
 
+    # 特殊返回值：表示已登录，没二维码可截
+    ALREADY_LOGGED_IN = 'ALREADY_LOGGED_IN'
+
     async def capture_login_page(self) -> Optional[str]:
-        """截二维码登录页。失败返回 None（让前端显示错误，别给白板）。"""
+        """截二维码登录页。返回值：
+            - data:image/png;base64,...  正常截到二维码
+            - 'ALREADY_LOGGED_IN'        已登录，无需扫码
+            - None                       异常 / 截图失败
+        """
         if not self.start():
             log.warning('[toutiao] %s capture: Chrome 启动失败', self.user_id)
             return None
 
         async def _do(page, ctx):
-            # 1. 改真实 Chrome UA（headless 默认含 HeadlessChrome 字样会被反爬挡）
             try:
                 await ctx.set_extra_http_headers({'User-Agent': self._REAL_UA})
             except Exception:
                 pass
             await page.set_viewport_size({'width': 1280, 'height': 900})
 
-            # 2. goto + 记录响应状态
             try:
                 resp = await page.goto(
                     'https://mp.toutiao.com', wait_until='commit', timeout=30_000,
@@ -243,11 +248,21 @@ class ToutiaoBrowser:
                 log.warning('[toutiao] %s goto 失败: %s', self.user_id, e)
                 return None
 
-            # 3. 等 redirect + 二维码 canvas 加载
             await asyncio.sleep(2)
-            log.info('[toutiao] %s after 2s url=%s', self.user_id, page.url)
+            url_now = page.url
+            log.info('[toutiao] %s after 2s url=%s', self.user_id, url_now)
 
-            # 试图等二维码元素（canvas / img / 任何含 qr 的 class），找不到也继续截
+            # 已登录 → 跳到 dashboard（含 profile_v4 等），别浪费时间截 dashboard
+            if 'mp.toutiao.com' in url_now and not any(k in url_now for k in ('sso.', 'passport.', '/login', 'auth/')):
+                if 'profile_v4' in url_now or 'mp.toutiao.com/' != url_now and 'home' in url_now or url_now.endswith('mp.toutiao.com/profile_v4/'):
+                    log.info('[toutiao] %s 已登录 (%s)，不需扫码', self.user_id, url_now)
+                    return self.ALREADY_LOGGED_IN
+                # 兜底：URL 在 mp.toutiao.com 域内但不像登录页 → 也当已登录
+                if '/login' not in url_now and 'sso' not in url_now:
+                    log.info('[toutiao] %s 看起来已登录 (%s)，跳过截图', self.user_id, url_now)
+                    return self.ALREADY_LOGGED_IN
+
+            # 等二维码元素
             try:
                 await page.wait_for_selector(
                     'canvas, img[src*="qr"], [class*="qrcode"], [class*="QRCode"], [class*="QrCode"]',
@@ -258,8 +273,6 @@ class ToutiaoBrowser:
                 log.info('[toutiao] %s 未找到二维码元素（可能反爬）', self.user_id)
 
             await asyncio.sleep(2)
-
-            # 4. 截图
             png = await page.screenshot(full_page=False, type='png')
             log.info('[toutiao] %s screenshot %d bytes', self.user_id, len(png))
             return f'data:image/png;base64,{base64.b64encode(png).decode()}'
