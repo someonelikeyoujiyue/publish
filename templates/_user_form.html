@@ -21,14 +21,41 @@
                      cursor:pointer;color:#94a3b8;line-height:1;">×</button>
     </div>
 
-    <div style="padding:12px 16px;background:#fef3c7;border-left:4px solid #d97706;
-                border-radius:4px;font-size:13px;color:#78350f;line-height:1.6;
+    {% if is_new %}
+    <div style="padding:14px 16px;background:#fef3c7;border-left:4px solid #d97706;
+                border-radius:4px;font-size:13px;color:#78350f;line-height:1.7;
                 margin-bottom:18px;">
-      ⚠️ 提交前请先在公众号后台「<b>设置与开发 → 基本配置 → IP 白名单</b>」<br>
-      添加：<code style="background:#fef9c3;padding:1px 6px;border-radius:3px;
-                          font-weight:700;">47.236.168.208</code><br>
-      否则推送会报 <code>errcode 40164</code>
+      <div style="font-weight:700;margin-bottom:8px;font-size:13px;">
+        📖 如何获取公众号 app_id 和 app_secret
+      </div>
+      <ol style="padding-left:20px;margin:0 0 10px;">
+        <li>先去微信公众平台 <a href="https://mp.weixin.qq.com" target="_blank"
+            style="color:#0f766e;font-weight:600;">mp.weixin.qq.com</a> 注册一个公众号</li>
+        <li>登录微信公众平台开发者平台
+          <a href="https://developers.weixin.qq.com/platform" target="_blank"
+             style="color:#0f766e;font-weight:600;">developers.weixin.qq.com/platform</a>
+          ，选择刚才注册的公众号</li>
+        <li>进入「<b>基础信息 → 开发密钥</b>」，<b>新建 appSecret</b> 后保存
+          <code style="background:#fef9c3;padding:1px 5px;border-radius:3px;">appid</code>
+          和
+          <code style="background:#fef9c3;padding:1px 5px;border-radius:3px;">appSecret</code>
+        </li>
+        <li>在同一页面把 <b>IP 白名单</b> 设置为
+          <code style="background:#fef9c3;padding:2px 7px;border-radius:3px;
+                       font-weight:700;color:#0f766e;">47.236.168.208</code>
+          （否则推送报 <code>errcode 40164</code>）</li>
+        <li>把 <code>appid</code> 和 <code>appSecret</code> 填到下方表单</li>
+      </ol>
     </div>
+    {% else %}
+    <div style="padding:10px 14px;background:#fef3c7;border-left:4px solid #d97706;
+                border-radius:4px;font-size:12px;color:#78350f;line-height:1.6;
+                margin-bottom:18px;">
+      ⚠️ 如更换公众号，记得在新公众号的 IP 白名单加
+      <code style="background:#fef9c3;padding:1px 5px;border-radius:3px;
+                   font-weight:700;">47.236.168.208</code>
+    </div>
+    {% endif %}
 
     {% if error %}
     <div style="padding:10px 14px;background:#fee2e2;color:#991b1b;
