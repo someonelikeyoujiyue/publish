@@ -287,68 +287,98 @@ class ToutiaoBrowser:
             - data:image/png;base64,...  正常截到二维码
             - 'ALREADY_LOGGED_IN'        已登录，无需扫码
             - None                       异常 / 截图失败
+
+        关键：截图后**不 close page** —— 登录页 JS 需要持续 poll SSO 服务器才能
+        在用户手机点"确认登录"后收到 cookie 并写入 user_data_dir。如果 close 了
+        page，登录页 JS 停跑，扫多少次都没用。
         """
         if not self.start():
             log.warning('[toutiao] %s capture: Chrome 启动失败', self.user_id)
             return None
 
-        async def _do(page, ctx):
-            try:
-                await ctx.set_extra_http_headers({'User-Agent': self._REAL_UA})
-            except Exception:
-                pass
-            await page.set_viewport_size({'width': 1280, 'height': 900})
-
-            try:
-                resp = await page.goto(
-                    'https://mp.toutiao.com', wait_until='commit', timeout=30_000,
-                )
-                log.info('[toutiao] %s goto OK status=%s url=%s',
-                         self.user_id, resp.status if resp else 'no_resp', page.url)
-            except Exception as e:
-                log.warning('[toutiao] %s goto 失败: %s', self.user_id, e)
-                return None
-
-            # 等 url 稳定（最多 8s），同时为 cookie 写入留时间
-            last_url = ''
-            for _ in range(8):
-                await asyncio.sleep(1)
-                cur = page.url
-                if cur and cur == last_url:
-                    break
-                last_url = cur
-            url_now = last_url
-            log.info('[toutiao] %s after settle url=%s', self.user_id, url_now)
-
-            # 已登录判定：必须有 session 类 cookie，否则即便 url 显示 dashboard 也按未登录处理
-            cookies = await ctx.cookies()
-            cookie_names = {c.get('name', '').lower() for c in cookies}
-            session_cookies = {'sessionid', 'sid_tt', 'sid_guard', 'uid_tt',
-                               'uid_tt_ss', 'sid_ucp_v1', 'ssid_ucp_v1'}
-            if (cookie_names & session_cookies) and not any(
-                k in url_now for k in ('sso.', 'passport.', '/login', 'auth/')
-            ):
-                log.info('[toutiao] %s 已登录 (cookie ok, url=%s)，跳过截图',
-                         self.user_id, url_now)
-                return self.ALREADY_LOGGED_IN
-
-            # 等二维码元素
-            try:
-                await page.wait_for_selector(
-                    'canvas, img[src*="qr"], [class*="qrcode"], [class*="QRCode"], [class*="QrCode"]',
-                    timeout=8_000,
-                )
-                log.info('[toutiao] %s 二维码元素加载完成', self.user_id)
-            except Exception:
-                log.info('[toutiao] %s 未找到二维码元素（可能反爬）', self.user_id)
-
-            await asyncio.sleep(2)
-            png = await page.screenshot(full_page=False, type='png')
-            log.info('[toutiao] %s screenshot %d bytes', self.user_id, len(png))
-            return f'data:image/png;base64,{base64.b64encode(png).decode()}'
-
+        from playwright.async_api import async_playwright
         try:
-            return await self._with_page_async(_do)
+            async with async_playwright() as p:
+                browser = await p.chromium.connect_over_cdp(
+                    f'http://127.0.0.1:{self.cdp_port}'
+                )
+                try:
+                    ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+
+                    # 关掉之前留下的所有 page（过期的二维码登录页 / 之前的 check_login 残留）
+                    for pg in list(ctx.pages):
+                        try:
+                            await pg.close()
+                        except Exception:
+                            pass
+
+                    if _STEALTH_JS.exists():
+                        try:
+                            await ctx.add_init_script(path=str(_STEALTH_JS))
+                        except Exception:
+                            pass
+                    try:
+                        await ctx.set_extra_http_headers({'User-Agent': self._REAL_UA})
+                    except Exception:
+                        pass
+
+                    page = await ctx.new_page()
+                    await page.set_viewport_size({'width': 1280, 'height': 900})
+
+                    try:
+                        resp = await page.goto(
+                            'https://mp.toutiao.com', wait_until='commit', timeout=30_000,
+                        )
+                        log.info('[toutiao] %s goto OK status=%s url=%s',
+                                 self.user_id, resp.status if resp else 'no_resp', page.url)
+                    except Exception as e:
+                        log.warning('[toutiao] %s goto 失败: %s', self.user_id, e)
+                        try: await page.close()
+                        except Exception: pass
+                        return None
+
+                    # 等 url 稳定
+                    last_url = ''
+                    for _ in range(8):
+                        await asyncio.sleep(1)
+                        cur = page.url
+                        if cur and cur == last_url:
+                            break
+                        last_url = cur
+                    url_now = last_url
+                    log.info('[toutiao] %s after settle url=%s', self.user_id, url_now)
+
+                    # 已登录（用 cookie 判而非 url 关键词）
+                    cookies = await ctx.cookies()
+                    cookie_names = {c.get('name', '').lower() for c in cookies}
+                    session_cookies = {'sessionid', 'sid_tt', 'sid_guard', 'uid_tt',
+                                       'uid_tt_ss', 'sid_ucp_v1', 'ssid_ucp_v1'}
+                    if (cookie_names & session_cookies) and not any(
+                        k in url_now for k in ('sso.', 'passport.', '/login', 'auth/')
+                    ):
+                        log.info('[toutiao] %s 已登录，跳过截图', self.user_id)
+                        try: await page.close()
+                        except Exception: pass
+                        return self.ALREADY_LOGGED_IN
+
+                    # 等二维码渲染
+                    try:
+                        await page.wait_for_selector(
+                            'canvas, img[src*="qr"], [class*="qrcode"], [class*="QRCode"], [class*="QrCode"]',
+                            timeout=8_000,
+                        )
+                    except Exception:
+                        log.info('[toutiao] %s 未找到二维码元素（可能反爬）', self.user_id)
+
+                    await asyncio.sleep(2)
+                    png = await page.screenshot(full_page=False, type='png')
+                    log.info('[toutiao] %s screenshot %d bytes (page 保持打开等扫码确认)',
+                             self.user_id, len(png))
+                    # !!! 不关 page —— 登录 JS 继续 poll，等用户扫码 + 手机确认
+                    return f'data:image/png;base64,{base64.b64encode(png).decode()}'
+                finally:
+                    # 断 Playwright 客户端但不影响 Chrome 进程里残留的 page
+                    await browser.close()
         except Exception as e:
             log.warning('[toutiao] %s capture 整体异常: %s', self.user_id, e)
             return None
