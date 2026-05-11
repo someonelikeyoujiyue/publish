@@ -213,26 +213,61 @@ class ToutiaoBrowser:
 
     # ── 截二维码 ──────────────────────────────────────────────────────────
 
+    _REAL_UA = (
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+    )
+
     async def capture_login_page(self) -> Optional[str]:
+        """截二维码登录页。失败返回 None（让前端显示错误，别给白板）。"""
         if not self.start():
+            log.warning('[toutiao] %s capture: Chrome 启动失败', self.user_id)
             return None
 
         async def _do(page, ctx):
-            await page.set_viewport_size({'width': 1280, 'height': 800})
+            # 1. 改真实 Chrome UA（headless 默认含 HeadlessChrome 字样会被反爬挡）
             try:
-                await page.goto(
+                await ctx.set_extra_http_headers({'User-Agent': self._REAL_UA})
+            except Exception:
+                pass
+            await page.set_viewport_size({'width': 1280, 'height': 900})
+
+            # 2. goto + 记录响应状态
+            try:
+                resp = await page.goto(
                     'https://mp.toutiao.com', wait_until='commit', timeout=30_000,
                 )
+                log.info('[toutiao] %s goto OK status=%s url=%s',
+                         self.user_id, resp.status if resp else 'no_resp', page.url)
             except Exception as e:
-                log.warning('[toutiao] capture goto 异常: %s', e)
-            await asyncio.sleep(3)
+                log.warning('[toutiao] %s goto 失败: %s', self.user_id, e)
+                return None
+
+            # 3. 等 redirect + 二维码 canvas 加载
+            await asyncio.sleep(2)
+            log.info('[toutiao] %s after 2s url=%s', self.user_id, page.url)
+
+            # 试图等二维码元素（canvas / img / 任何含 qr 的 class），找不到也继续截
+            try:
+                await page.wait_for_selector(
+                    'canvas, img[src*="qr"], [class*="qrcode"], [class*="QRCode"], [class*="QrCode"]',
+                    timeout=8_000,
+                )
+                log.info('[toutiao] %s 二维码元素加载完成', self.user_id)
+            except Exception:
+                log.info('[toutiao] %s 未找到二维码元素（可能反爬）', self.user_id)
+
+            await asyncio.sleep(2)
+
+            # 4. 截图
             png = await page.screenshot(full_page=False, type='png')
+            log.info('[toutiao] %s screenshot %d bytes', self.user_id, len(png))
             return f'data:image/png;base64,{base64.b64encode(png).decode()}'
 
         try:
             return await self._with_page_async(_do)
         except Exception as e:
-            log.warning('[toutiao] %s capture 异常: %s', self.user_id, e)
+            log.warning('[toutiao] %s capture 整体异常: %s', self.user_id, e)
             return None
 
     # ── 解绑（清登录态） ──────────────────────────────────────────────────

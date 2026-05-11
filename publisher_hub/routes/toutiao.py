@@ -94,7 +94,8 @@ async def bind(user_id: str, request: Request):
     if not img_data:
         return HTMLResponse(
             '<div class="badge badge-failed" style="padding:8px 12px;">'
-            '✗ 截二维码失败，看 journalctl -u publisher-hub 日志</div>',
+            '✗ 截图失败（可能 page.goto 超时或被反爬挡）。'
+            '看日志: <code>journalctl -u publisher-hub -n 50</code></div>',
         )
 
     return templates.TemplateResponse(request, '_toutiao_qr.html', {
