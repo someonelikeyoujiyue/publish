@@ -70,7 +70,7 @@ class ToutiaoBrowser:
         # 状态缓存：HTMX 频繁轮询时复用，避免重复 page.goto
         self._cache_result: Optional[dict] = None
         self._cache_at: float = 0.0
-        self._cache_ttl: float = 30.0      # 30 秒内复用结果
+        self._cache_ttl: float = 5.0       # 5 秒内复用结果（足够防 HTMX 过载）
 
     # ── 进程管理（同步即可，subprocess.Popen 不阻塞）────────────────────
 

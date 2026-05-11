@@ -17,6 +17,13 @@
       · cookie 剩 {{ state.cookie_expires_days }} 天
     {% endif %}
   </span>
+  {# 登录后清掉二维码区，免得截图一直留在那 #}
+  <script>
+    (function(){
+      var a = document.getElementById('toutiao-action');
+      if (a && a.innerHTML.trim()) a.innerHTML = '';
+    })();
+  </script>
 {% elif s == 'error' %}
   <span class="badge badge-failed" style="padding:8px 12px;">
     ⚠ 检测出错：{{ state.error[:80] }}

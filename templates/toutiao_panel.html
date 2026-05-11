@@ -25,10 +25,10 @@
     扫码绑定一次后，登录态长期有效（cookie 过期前会自动刷新）。
   </div>
 
-  {# 状态卡片（HTMX 15s 轮询，check_login 内部有 30s 缓存防过载） #}
+  {# 状态卡片（HTMX 3s 轮询，check_login 内部有 5s 缓存防过载） #}
   <div id="toutiao-status"
        hx-get="/{{ user.id }}/toutiao/status"
-       hx-trigger="load, every 15s"
+       hx-trigger="load, every 3s"
        hx-swap="innerHTML">
     <span class="badge" style="padding:8px 12px;color:#64748b;background:#f1f5f9;">
       <span class="spinner" style="border-color:rgba(15,118,110,0.25);border-top-color:#0f766e;"></span>
