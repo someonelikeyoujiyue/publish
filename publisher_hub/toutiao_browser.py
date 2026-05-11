@@ -215,6 +215,15 @@ class ToutiaoBrowser:
             # 提取用户名：DOM 多 selector 尝试 + cookie 兜底
             # 真实命中：.auth-avator-name （头条号 dashboard 顶部头像旁，注意 avator 是
             # 他们的拼写错误，不是 avatar；两种都留着以防他们将来改正）
+            # url 稳定 ≠ SPA 渲染完，所以先 wait_for_selector 最多 5s 等元素出现
+            try:
+                await page.wait_for_selector(
+                    '.auth-avator-name, .auth-avatar-name, [class*="auth-avator"]',
+                    timeout=5_000,
+                )
+            except Exception:
+                pass
+
             name = ''
             for sel in [
                 '.auth-avator-name', '.auth-avatar-name',
