@@ -62,6 +62,24 @@ async def publish_weitoutiao(
         except Exception:
             return {'ok': False, 'error': 'ProseMirror 编辑器未加载（可能页面变了或被反爬挡了）'}
 
+        # 关掉"发布助手"侧拉抽屉 —— 它的 .byte-drawer-mask 会拦截所有点击事件，
+        # 导致 page.click(.ProseMirror) 一直 timeout。点 mask / 按 ESC 都关不掉，
+        # 唯一管用的是直接从 DOM 移除。
+        try:
+            removed = await page.evaluate("""() => {
+              const ms = document.querySelectorAll(
+                '.byte-drawer-mask, .publish-assistant-old-drawer, .byte-drawer-wrapper'
+              );
+              ms.forEach(el => el.remove());
+              return ms.length;
+            }""")
+            if removed:
+                log.info('[toutiao_publisher] %s 关掉了 %d 个 drawer 元素',
+                         browser.user_id, removed)
+                await asyncio.sleep(0.3)
+        except Exception:
+            pass
+
         # 聚焦编辑器 + 输入文本
         await page.click('.ProseMirror')
         await asyncio.sleep(0.3)
