@@ -179,31 +179,55 @@ class ToutiaoBrowser:
                     pass
                 return {'status': 'logged_out', 'url': url, 'reason': 'goto_timeout'}
 
-            await asyncio.sleep(1)
-            url = page.url
+            # 等 url 稳定（SPA redirect 可能需要 3-5 秒）
+            last_url = ''
+            for _ in range(8):
+                await asyncio.sleep(1)
+                cur = page.url
+                if cur and cur == last_url:
+                    break
+                last_url = cur
+            url = last_url
 
             if any(k in url for k in ('sso.', 'passport.', '/login', 'auth/')):
                 return {'status': 'logged_out', 'url': url}
 
+            # 提取用户名：DOM 多 selector 尝试 + cookie 兜底
             name = ''
             for sel in [
                 '[class*="user-name"]', '[class*="username"]',
-                '[class*="UserName"]', '.avatar img',
-                'img[alt]',
+                '[class*="UserName"]', '[class*="nickname"]',
+                '[class*="NickName"]', '[class*="user_name"]',
+                '[class*="userInfo"] [class*="name"]',
+                '.byte-avatar + *',
+                'header [class*="name"]',
             ]:
                 try:
                     el = await page.query_selector(sel)
                     if el:
-                        text = await el.inner_text()
-                        alt = (await el.get_attribute('alt')) if not text else ''
-                        candidate = (text or alt or '').strip()
-                        if candidate and len(candidate) <= 30:
-                            name = candidate
+                        text = (await el.inner_text() or '').strip()
+                        if text and 1 <= len(text) <= 30:
+                            name = text
                             break
                 except Exception:
                     pass
 
             cookies = await ctx.cookies()
+            # 从 cookie 兜底拿 name（头条号常存 nickname 类 cookie）
+            if not name:
+                for c in cookies:
+                    cn = c.get('name', '').lower()
+                    if cn in ('nickname', 'user_name', 'screen_name', 'login_name'):
+                        cv = (c.get('value') or '').strip()
+                        try:
+                            from urllib.parse import unquote
+                            cv = unquote(cv)
+                        except Exception:
+                            pass
+                        if cv and len(cv) <= 30:
+                            name = cv
+                            break
+
             exp_days = None
             for c in cookies:
                 n = c.get('name', '').lower()
@@ -216,7 +240,7 @@ class ToutiaoBrowser:
             return {
                 'status': 'logged_in',
                 'url': url,
-                'name': name or '(未识别)',
+                'name': name,                  # 空字符串而不是 '(未识别)'
                 'cookie_expires_days': exp_days,
             }
 

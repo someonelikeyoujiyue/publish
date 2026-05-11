@@ -12,9 +12,9 @@
   </span>
 {% elif s == 'logged_in' %}
   <span class="badge badge-pushed" style="padding:8px 12px;">
-    ✓ 已登录：{{ state.name }}
+    ✓ 已登录{% if state.name %}（{{ state.name }}）{% endif %}
     {% if state.cookie_expires_days is not none %}
-      （cookie 剩 {{ state.cookie_expires_days }} 天）
+      · cookie 剩 {{ state.cookie_expires_days }} 天
     {% endif %}
   </span>
 {% elif s == 'error' %}
