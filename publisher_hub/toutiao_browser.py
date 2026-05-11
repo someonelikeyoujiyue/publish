@@ -23,6 +23,9 @@ from typing import Optional
 
 log = logging.getLogger('publisher_hub.toutiao_browser')
 
+# stealth.js（伪装 headless 特征：navigator.webdriver / plugins / languages 等）
+_STEALTH_JS = Path(__file__).parent / 'vendor' / 'stealth.min.js'
+
 
 # ── Chrome 路径与数据目录 ────────────────────────────────────────────────────
 
@@ -123,7 +126,7 @@ class ToutiaoBrowser:
     # ── async playwright 辅助 ────────────────────────────────────────────
 
     async def _with_page_async(self, fn):
-        """连 CDP → await fn(page, ctx) → 自动 close。"""
+        """连 CDP → 新开 page（注入 stealth.js）→ await fn(page, ctx) → 关 page。"""
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(
@@ -131,8 +134,23 @@ class ToutiaoBrowser:
             )
             try:
                 ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                return await fn(page, ctx)
+
+                # 注入 stealth（修改 navigator.webdriver 等，每次 new_page 都生效）
+                if _STEALTH_JS.exists():
+                    try:
+                        await ctx.add_init_script(path=str(_STEALTH_JS))
+                    except Exception as e:
+                        log.debug('[toutiao] stealth init_script 注入失败: %s', e)
+
+                # 始终新建 page（保证 stealth 在 navigation 前已注入）
+                page = await ctx.new_page()
+                try:
+                    return await fn(page, ctx)
+                finally:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
             finally:
                 await browser.close()
 
