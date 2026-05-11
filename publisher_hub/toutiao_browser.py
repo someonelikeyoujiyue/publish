@@ -1,17 +1,15 @@
-"""今日头条号 Chrome 实例管理 + 扫码绑定 + 登录态检查。
+"""今日头条号 Chrome 实例管理 + 扫码绑定 + 登录态检查（async_playwright 版）。
 
 每个 publisher-hub 用户独享一个 Chrome 子进程：
   - CDP 端口 9230+ 自动分配，写入 user.toutiao.cdp_port
   - user_data_dir = /data/publisher-hub/chrome/toutiao-<user_id>/  持久化 cookie
 
-扫码流程：
-  1. POST /{uid}/toutiao/bind → 启 Chrome → playwright connect_over_cdp
-  2. 打开 https://mp.toutiao.com → 等二维码 canvas 加载
-  3. 整页 screenshot → base64 PNG → 前端 modal 展示
-  4. 前端轮询 /{uid}/toutiao/status → page.url 跳到 dashboard = 登录成功
+用 async_playwright 而非 sync_playwright（后者在 FastAPI 进程里多次调用
+会出 'PlaywrightContextManager has no _playwright' 状态污染错误）。
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import glob
 import logging
@@ -30,13 +28,10 @@ log = logging.getLogger('publisher_hub.toutiao_browser')
 
 def _find_chrome() -> str:
     candidates = [
-        # 服务器：playwright bundled chromium（newmedia 验证过的版本）
         '/root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome',
         '/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome',
-        # 本地 macOS
         os.path.expanduser('~/Library/Caches/ms-playwright/chromium-*/chrome-mac-arm64/chrome'),
         os.path.expanduser('~/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium'),
-        # System Chrome
         '/usr/bin/google-chrome',
         '/usr/bin/google-chrome-stable',
         '/usr/bin/chromium-browser',
@@ -52,9 +47,8 @@ def _find_chrome() -> str:
 
 
 def _data_root() -> Path:
-    # 服务器优先 /data/publisher-hub/chrome（持久），本地用 /tmp
     server = Path('/data/publisher-hub/chrome')
-    if server.parent.parent.exists():        # /data 存在 → 服务器侧
+    if server.parent.parent.exists():
         server.mkdir(parents=True, exist_ok=True)
         return server
     fallback = Path('/tmp/publisher-hub-chrome')
@@ -75,10 +69,9 @@ class ToutiaoBrowser:
         self._cache_at: float = 0.0
         self._cache_ttl: float = 30.0      # 30 秒内复用结果
 
-    # ── 进程管理 ──────────────────────────────────────────────────────────
+    # ── 进程管理（同步即可，subprocess.Popen 不阻塞）────────────────────
 
     def is_running(self) -> bool:
-        """CDP 端口可达 = Chrome 在跑。"""
         try:
             with socket.create_connection(('127.0.0.1', self.cdp_port), timeout=1):
                 return True
@@ -123,29 +116,29 @@ class ToutiaoBrowser:
         )
         log.info('[toutiao] %s Chrome :%d 已停', self.user_id, self.cdp_port)
 
-    # ── Playwright 辅助 ───────────────────────────────────────────────────
+    def invalidate_cache(self):
+        self._cache_result = None
+        self._cache_at = 0.0
 
-    def _with_page(self, fn):
-        """连 CDP → 调 fn(page, ctx) → 自动 close。"""
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(f'http://127.0.0.1:{self.cdp_port}')
+    # ── async playwright 辅助 ────────────────────────────────────────────
+
+    async def _with_page_async(self, fn):
+        """连 CDP → await fn(page, ctx) → 自动 close。"""
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(
+                f'http://127.0.0.1:{self.cdp_port}'
+            )
             try:
-                ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-                page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                return fn(page, ctx)
+                ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                return await fn(page, ctx)
             finally:
-                browser.close()
+                await browser.close()
 
     # ── 登录态检查 ────────────────────────────────────────────────────────
 
-    def check_login(self, force: bool = False) -> dict:
-        """返回 {'status': 'logged_in'/'logged_out'/'error', ...}。
-
-        Args:
-            force: True 时跳过缓存，强制 page.goto 真实检测
-        """
-        # 缓存命中（HTMX 频繁轮询时省 page.goto）
+    async def check_login(self, force: bool = False) -> dict:
         if not force and self._cache_result and (time.time() - self._cache_at) < self._cache_ttl:
             return self._cache_result
 
@@ -154,31 +147,26 @@ class ToutiaoBrowser:
             self._cache_result, self._cache_at = result, time.time()
             return result
 
-        def _do(page, ctx):
+        async def _do(page, ctx):
             try:
-                # wait_until='commit'：HTTP 响应头收到就返回，不等所有资源
-                # timeout 30s（头条号 headless 加载偶尔慢）
-                page.goto('https://mp.toutiao.com', wait_until='commit', timeout=30_000)
+                await page.goto(
+                    'https://mp.toutiao.com', wait_until='commit', timeout=30_000,
+                )
             except Exception as e:
                 log.warning('[toutiao] %s page.goto 超时/异常: %s', self.user_id, e)
-                # 失败时退而求其次：看当前 page.url（可能还停在上次的页面）
                 url = ''
                 try:
                     url = page.url
                 except Exception:
                     pass
-                # 实在拿不到 URL → 当作未登录（让用户重新扫码）
                 return {'status': 'logged_out', 'url': url, 'reason': 'goto_timeout'}
 
-            # 等少许时间让 redirect 完成
-            time.sleep(1)
+            await asyncio.sleep(1)
             url = page.url
 
-            # 未登录通常 redirect 到 sso.snssdk.com / passport / login
             if any(k in url for k in ('sso.', 'passport.', '/login', 'auth/')):
                 return {'status': 'logged_out', 'url': url}
 
-            # 已登录：抽取用户名（多个 selector 尝试）
             name = ''
             for sel in [
                 '[class*="user-name"]', '[class*="username"]',
@@ -186,16 +174,18 @@ class ToutiaoBrowser:
                 'img[alt]',
             ]:
                 try:
-                    el = page.query_selector(sel)
+                    el = await page.query_selector(sel)
                     if el:
-                        name = (el.inner_text() or el.get_attribute('alt') or '').strip()
-                        if name and len(name) <= 30:
+                        text = await el.inner_text()
+                        alt = (await el.get_attribute('alt')) if not text else ''
+                        candidate = (text or alt or '').strip()
+                        if candidate and len(candidate) <= 30:
+                            name = candidate
                             break
                 except Exception:
                     pass
 
-            # cookie 过期检查
-            cookies = ctx.cookies()
+            cookies = await ctx.cookies()
             exp_days = None
             for c in cookies:
                 n = c.get('name', '').lower()
@@ -213,39 +203,34 @@ class ToutiaoBrowser:
             }
 
         try:
-            result = self._with_page(_do)
+            result = await self._with_page_async(_do)
         except Exception as e:
             log.warning('[toutiao] %s check_login 整体异常: %s', self.user_id, e)
-            # 不报 error 给前端，当作 logged_out（友好提示）
             result = {'status': 'logged_out', 'reason': f'check_exception: {e}'}
 
         self._cache_result, self._cache_at = result, time.time()
         return result
 
-    def invalidate_cache(self):
-        """让下次 check_login 不走缓存（bind 后调用，加速看到登录状态）。"""
-        self._cache_result = None
-        self._cache_at = 0.0
+    # ── 截二维码 ──────────────────────────────────────────────────────────
 
-    # ── 截二维码（整页 screenshot） ───────────────────────────────────────
-
-    def capture_login_page(self) -> Optional[str]:
-        """返回整页 base64 PNG（前端 <img src=...> 直接展示，含二维码）。"""
+    async def capture_login_page(self) -> Optional[str]:
         if not self.start():
             return None
 
-        def _do(page, ctx):
-            page.set_viewport_size({'width': 1280, 'height': 800})
+        async def _do(page, ctx):
+            await page.set_viewport_size({'width': 1280, 'height': 800})
             try:
-                page.goto('https://mp.toutiao.com', wait_until='domcontentloaded', timeout=15_000)
+                await page.goto(
+                    'https://mp.toutiao.com', wait_until='commit', timeout=30_000,
+                )
             except Exception as e:
                 log.warning('[toutiao] capture goto 异常: %s', e)
-            time.sleep(3)              # 等二维码 canvas 加载
-            png = page.screenshot(full_page=False, type='png')
+            await asyncio.sleep(3)
+            png = await page.screenshot(full_page=False, type='png')
             return f'data:image/png;base64,{base64.b64encode(png).decode()}'
 
         try:
-            return self._with_page(_do)
+            return await self._with_page_async(_do)
         except Exception as e:
             log.warning('[toutiao] %s capture 异常: %s', self.user_id, e)
             return None
@@ -258,6 +243,7 @@ class ToutiaoBrowser:
         if self.user_data_dir.exists():
             shutil.rmtree(self.user_data_dir)
             log.info('[toutiao] %s user_data_dir 已删', self.user_id)
+        self.invalidate_cache()
 
 
 # ── 全局缓存 + 端口分配 ─────────────────────────────────────────────────────

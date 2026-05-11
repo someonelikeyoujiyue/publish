@@ -34,7 +34,7 @@ def panel(user_id: str, request: Request):
 
 
 @router.get('/{user_id}/toutiao/status', response_class=HTMLResponse)
-def status(user_id: str, request: Request):
+async def status(user_id: str, request: Request):
     config = request.app.state.config
     user = cfg.get_user(config, user_id)
     if not user:
@@ -47,10 +47,10 @@ def status(user_id: str, request: Request):
     else:
         try:
             browser = get_browser(user_id, int(port))
-            state = browser.check_login()
+            state = await browser.check_login()
         except Exception as e:
             log.exception('[toutiao] %s check_login 路由层异常', user_id)
-            state = {'status': 'error', 'error': str(e)}
+            state = {'status': 'logged_out', 'reason': str(e)}
 
     return templates.TemplateResponse(request, '_toutiao_status.html', {
         'user':  user,
@@ -59,7 +59,7 @@ def status(user_id: str, request: Request):
 
 
 @router.post('/{user_id}/toutiao/bind', response_class=HTMLResponse)
-def bind(user_id: str, request: Request):
+async def bind(user_id: str, request: Request):
     config = request.app.state.config
     user = cfg.get_user_raw(config, user_id)
     if not user:
@@ -82,7 +82,7 @@ def bind(user_id: str, request: Request):
     # 启 Chrome + 截二维码
     try:
         browser = get_browser(user_id, int(port))
-        img_data = browser.capture_login_page()
+        img_data = await browser.capture_login_page()
         browser.invalidate_cache()      # 让下次 status 检测立刻跑（用户扫码后能尽快变绿）
     except Exception as e:
         log.exception('[toutiao] capture 路由层异常')
@@ -105,7 +105,7 @@ def bind(user_id: str, request: Request):
 
 
 @router.post('/{user_id}/toutiao/unbind', response_class=HTMLResponse)
-def unbind(user_id: str, request: Request):
+async def unbind(user_id: str, request: Request):
     config = request.app.state.config
     user = cfg.get_user_raw(config, user_id)
     if not user:
