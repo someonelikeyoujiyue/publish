@@ -111,9 +111,12 @@ async def push(user_id: str, draft_id: int, request: Request):
 
     title   = draft.get('title') or ''
     content = draft.get('content') or ''
+    images  = [u.strip() for u in (draft.get('image_urls') or '').split(',') if u.strip()]
 
     browser = get_browser(user_id, int(port))
-    result = await publish_weitoutiao(browser, title, content, save_draft_only=draft_only)
+    result = await publish_weitoutiao(
+        browser, title, content, images=images, save_draft_only=draft_only,
+    )
 
     bot = FeishuBot(config)
     user_name = user.get('name') or user_id

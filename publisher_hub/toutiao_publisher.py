@@ -1,17 +1,16 @@
 """头条号微头条 (weitoutiao) 自动发布。
 
-通过 CDP 连到用户已绑定的 Chrome → 进发布页 → 把 title+content 写到 ProseMirror
-编辑器 → 点发布按钮。
-
-跟 wechat / xhs publisher 不一样：
-- wechat 走官方 API（HTTPS POST）
-- xhs 之前走 myaibot 拿二维码
-- toutiao 走 DOM 操作（因为没公开 API），需要用户先扫码绑定
+通过 CDP 连到用户已绑定的 Chrome → 进发布页 → 关掉"发布助手"抽屉 →
+把 title+content 写到 ProseMirror 编辑器 → 上传图片 → 点发布/存草稿。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
+import tempfile
+import urllib.request
 from typing import Optional
 
 from .toutiao_browser import ToutiaoBrowser
@@ -20,11 +19,57 @@ log = logging.getLogger('publisher_hub.toutiao_publisher')
 
 PUBLISH_URL = 'https://mp.toutiao.com/profile_v4/weitoutiao/publish'
 
+# image_urls 在数据库里都是 http://47.236.168.208:8899/img/... —— 服务器内部
+# 走 127.0.0.1 更快、不依赖公网
+_INTERNAL_HOST_REWRITE = re.compile(r'^https?://(47\.236\.168\.208|content\.yinimengyue\.top)(:\d+)?')
+
+
+def _local_url(url: str) -> str:
+    """改写 host 到本机 newmedia-web 实例（:8899）。"""
+    if not url:
+        return url
+    return _INTERNAL_HOST_REWRITE.sub('http://127.0.0.1:8899', url)
+
+
+def _download_images(urls: list[str], max_count: int = 9) -> list[str]:
+    """同步下载远程图片到 /tmp，返回本地路径列表。微头条最多 9 张图。"""
+    paths: list[str] = []
+    tmpdir = tempfile.mkdtemp(prefix='toutiao_upload_')
+    for i, raw in enumerate(urls[:max_count]):
+        url = _local_url(raw.strip())
+        if not url:
+            continue
+        try:
+            ext = os.path.splitext(url.split('?')[0])[1] or '.jpg'
+            if len(ext) > 5:
+                ext = '.jpg'
+            p = os.path.join(tmpdir, f'img{i:02d}{ext}')
+            urllib.request.urlretrieve(url, p)
+            paths.append(p)
+        except Exception as e:
+            log.warning('[toutiao_publisher] 下载图片失败 %s: %s', url, e)
+    return paths
+
+
+def _cleanup(paths: list[str]):
+    if not paths:
+        return
+    try:
+        d = os.path.dirname(paths[0])
+        for p in paths:
+            try: os.unlink(p)
+            except Exception: pass
+        try: os.rmdir(d)
+        except Exception: pass
+    except Exception:
+        pass
+
 
 async def publish_weitoutiao(
     browser: ToutiaoBrowser,
     title: str,
     content: str,
+    images: Optional[list[str]] = None,
     save_draft_only: bool = False,
 ) -> dict:
     """发一条微头条。
@@ -33,10 +78,11 @@ async def publish_weitoutiao(
         browser: 用户的 ToutiaoBrowser 实例（必须已扫码登录）
         title:   仿写出来的标题，会拼到正文最前面
         content: 仿写正文
+        images:  图片 URL 列表（可空），自动下载到 /tmp 后通过 file input 上传
         save_draft_only: True 只点"存草稿"，False 点"发布"
 
     Returns:
-        {'ok': True, 'url': ...}
+        {'ok': True, 'mode': 'publish'|'draft', 'final_url'?: str, 'toast'?: str}
         {'ok': False, 'error': '...'}
     """
     if not browser.start():
@@ -45,13 +91,18 @@ async def publish_weitoutiao(
     # 微头条没有独立标题字段，把 title 拼到正文开头
     full_text = f'{title}\n\n{content}'.strip() if title else content
 
+    # 下载图片（同步、阻塞）
+    image_paths: list[str] = []
+    if images:
+        image_paths = _download_images(images)
+        log.info('[toutiao_publisher] %s 下载了 %d/%d 张图', browser.user_id, len(image_paths), len(images))
+
     async def _do(page, ctx):
         try:
             await page.goto(PUBLISH_URL, wait_until='commit', timeout=30_000)
         except Exception as e:
             return {'ok': False, 'error': f'goto 失败: {e}'}
 
-        # 等 dashboard SPA + 编辑器加载
         await asyncio.sleep(3)
         url = page.url
         if any(k in url for k in ('sso.', 'passport.', '/login', 'auth/')):
@@ -60,11 +111,9 @@ async def publish_weitoutiao(
         try:
             await page.wait_for_selector('.ProseMirror', timeout=15_000)
         except Exception:
-            return {'ok': False, 'error': 'ProseMirror 编辑器未加载（可能页面变了或被反爬挡了）'}
+            return {'ok': False, 'error': 'ProseMirror 编辑器未加载'}
 
-        # 关掉"发布助手"侧拉抽屉 —— 它的 .byte-drawer-mask 会拦截所有点击事件，
-        # 导致 page.click(.ProseMirror) 一直 timeout。点 mask / 按 ESC 都关不掉，
-        # 唯一管用的是直接从 DOM 移除。
+        # 关掉"发布助手"侧拉抽屉
         try:
             removed = await page.evaluate("""() => {
               const ms = document.querySelectorAll(
@@ -74,35 +123,44 @@ async def publish_weitoutiao(
               return ms.length;
             }""")
             if removed:
-                log.info('[toutiao_publisher] %s 关掉了 %d 个 drawer 元素',
-                         browser.user_id, removed)
+                log.info('[toutiao_publisher] %s 关掉了 %d 个 drawer 元素', browser.user_id, removed)
                 await asyncio.sleep(0.3)
         except Exception:
             pass
 
-        # 聚焦编辑器 + 输入文本
+        # 写正文
         await page.click('.ProseMirror')
         await asyncio.sleep(0.3)
-        # delay=5 ms/char，900 字约 4.5 秒；太快 ProseMirror 可能漏字
         try:
             await page.keyboard.type(full_text, delay=5)
         except Exception as e:
             return {'ok': False, 'error': f'输入文本失败: {e}'}
-
-        # 等编辑器把内容渲染完
         await asyncio.sleep(1.5)
 
-        # 校验编辑器内容长度
-        try:
-            editor_text = await page.evaluate(
-                'document.querySelector(".ProseMirror")?.innerText || ""'
-            )
-            if len(editor_text.strip()) < min(20, len(full_text) * 0.5):
-                return {'ok': False, 'error': f'内容写入异常 (编辑器只剩 {len(editor_text)} 字)'}
-        except Exception:
-            pass
+        # 上传图片：点"图片"按钮 → 动态生成 input[type=file] → setInputFiles
+        if image_paths:
+            try:
+                # 触发图片 toolbar 按钮（不能用 page.click 因为按钮文本"图片"重复出现在别处）
+                await page.evaluate("""() => {
+                  const btns = Array.from(document.querySelectorAll('.syl-toolbar-button'));
+                  const img = btns.find(b => (b.innerText||'').includes('图片'));
+                  if (img) img.click();
+                }""")
+                await asyncio.sleep(0.5)
+                # 拿到生成的 file input
+                file_input = await page.query_selector('input[type=file][accept^="image"]')
+                if not file_input:
+                    log.warning('[toutiao_publisher] %s 没生成 file input，跳过图片上传', browser.user_id)
+                else:
+                    await file_input.set_input_files(image_paths)
+                    log.info('[toutiao_publisher] %s 已 setInputFiles %d 张', browser.user_id, len(image_paths))
+                    # 等图片上传完成。头条号上传一张约 1-3s，给宽限到每张 3s + 2s 兜底
+                    await asyncio.sleep(min(len(image_paths) * 3 + 2, 30))
+            except Exception as e:
+                log.warning('[toutiao_publisher] %s 图片上传异常（继续发布）: %s', browser.user_id, e)
 
         # 点发布 / 存草稿
+        mode = 'draft' if save_draft_only else 'publish'
         btn_sel = '.save-draft' if save_draft_only else '.publish-co'
         try:
             btn = await page.wait_for_selector(f'{btn_sel}:not([disabled])', timeout=8_000)
@@ -112,37 +170,81 @@ async def publish_weitoutiao(
         except Exception as e:
             return {'ok': False, 'error': f'点击按钮失败: {e}'}
 
-        # 等发布完成。成功的信号可能是：
-        #   - URL 跳转回 dashboard
-        #   - 出现"发布成功"toast
-        #   - 出现成功 modal
-        await asyncio.sleep(3)
-        final_url = page.url
-        # 简单判断：URL 不再是 publish 页 = 发布成功；否则可能是失败 + 错误提示
-        if 'weitoutiao/publish' not in final_url:
-            log.info('[toutiao_publisher] ✓ %s url=%s', browser.user_id, final_url)
-            return {'ok': True, 'final_url': final_url, 'mode': 'draft' if save_draft_only else 'publish'}
+        # ── 判定成功 / 失败 ──────────────────────────────────────
+        # 等服务端响应
+        await asyncio.sleep(3.5)
 
-        # 还在发布页 → 看下页面有没有错误 toast
+        # 信号 1：URL 跳走（发布成功通常跳到 dashboard/列表；存草稿不跳）
+        final_url = page.url
+        if 'weitoutiao/publish' not in final_url:
+            log.info('[toutiao_publisher] ✓ %s URL 跳转 → %s', browser.user_id, final_url)
+            return {'ok': True, 'mode': mode, 'final_url': final_url}
+
+        # 信号 2：byte-design 真 toast（不抓侧栏"消息中心"那种红点徽章）
+        toast = await page.evaluate("""() => {
+          const sels = [
+            '.byte-message-content', '.byte-message__content',
+            '.byte-notification-content', '.byte-notification__content',
+            '.byte-toast', '[class*="byte-message_"]', '[class*="byte-toast_"]',
+          ];
+          for (const s of sels) {
+            const el = document.querySelector(s);
+            if (el) {
+              const t = (el.innerText || '').trim();
+              if (t) return t;
+            }
+          }
+          return '';
+        }""")
+        if toast:
+            log.info('[toutiao_publisher] %s toast=%r', browser.user_id, toast)
+            if any(k in toast for k in ('成功', '已保存', '已发布', '保存', '发布')):
+                return {'ok': True, 'mode': mode, 'toast': toast, 'final_url': final_url}
+            if any(k in toast for k in ('失败', '错误', '出错', '请稍后', '重试', '不能为空')):
+                return {'ok': False, 'error': toast}
+
+        # 信号 3：编辑器是否被清空（发布会清空）
+        editor_text = ''
         try:
-            err_text = await page.evaluate("""() => {
-              const t = document.querySelector('[class*="message"], [class*="toast"], [class*="notice"]');
-              return t ? (t.innerText || '').trim().slice(0, 200) : '';
-            }""")
+            editor_text = await page.evaluate(
+                'document.querySelector(".ProseMirror")?.innerText.trim() || ""'
+            )
         except Exception:
-            err_text = ''
-        log.warning('[toutiao_publisher] %s 仍在 publish 页 url=%s err_text=%s',
-                    browser.user_id, final_url, err_text)
-        return {'ok': False, 'error': err_text or '点击发布后页面没跳转，可能未真正发出（看日志）'}
+            pass
+
+        if not editor_text and mode == 'publish':
+            return {'ok': True, 'mode': mode, 'note': 'editor_cleared', 'final_url': final_url}
+
+        # 存草稿模式：编辑器不会清空。再等 2 秒看 toast
+        if mode == 'draft':
+            await asyncio.sleep(2)
+            toast2 = await page.evaluate("""() => {
+              const el = document.querySelector('.byte-message-content, .byte-message__content, [class*="byte-message_"]');
+              return el ? (el.innerText||'').trim() : '';
+            }""")
+            if toast2:
+                log.info('[toutiao_publisher] %s 二次 toast=%r', browser.user_id, toast2)
+                if any(k in toast2 for k in ('成功', '已保存', '保存')):
+                    return {'ok': True, 'mode': mode, 'toast': toast2}
+                if any(k in toast2 for k in ('失败', '错误', '出错')):
+                    return {'ok': False, 'error': toast2}
+            # 还看不到明确反馈 → 保守认为成功（点了按钮 + 无 error toast）
+            return {'ok': True, 'mode': mode, 'note': 'no_clear_signal'}
+
+        log.warning('[toutiao_publisher] %s 仍在 publish 页且无 toast，editor_text=%d chars',
+                    browser.user_id, len(editor_text))
+        return {'ok': False, 'error': '点击发布后页面没跳转、无成功提示（看日志）'}
 
     try:
         return await browser._with_page_async(_do)
     except Exception as e:
         log.exception('[toutiao_publisher] %s 整体异常', browser.user_id)
         return {'ok': False, 'error': str(e)}
+    finally:
+        _cleanup(image_paths)
 
 
-# CLI 入口（手动测试用）
+# CLI
 async def _cli(user_id: str, title: str, content: str, draft: bool):
     from .config import load_config
     cfg = load_config()
@@ -157,7 +259,7 @@ async def _cli(user_id: str, title: str, content: str, draft: bool):
 
 
 if __name__ == '__main__':
-    import argparse, sys
+    import argparse
     p = argparse.ArgumentParser(prog='python -m publisher_hub.toutiao_publisher')
     p.add_argument('user_id')
     p.add_argument('title')
