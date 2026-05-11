@@ -26,15 +26,29 @@ class UserUpdateBody(BaseModel):
 
 
 def _serialize_user(u: dict, db) -> dict:
-    """裁掉敏感字段（app_secret），加 ready 草稿数。"""
-    wc = dict(u.get('wechat') or {})
-    wc.pop('app_secret', None)
+    """白名单序列化：只返回前端需要的字段。
+
+    敏感字段（app_secret / proxy 凭证 / cookie 等）一律不出口；
+    LLM/调度类配置（prompts / sources / cron）暂不暴露给前端，需要时再加。
+    """
+    wc = u.get('wechat') or {}
+    tt = u.get('toutiao') or {}
+    xhs = u.get('xhs') or {}
     return {
-        'id':           u['id'],
-        'name':         u.get('name') or u['id'],
-        'wechat':       wc,
-        'xhs':          u.get('xhs') or {},
-        'toutiao':      u.get('toutiao') or {},
+        'id':      u['id'],
+        'name':    u.get('name') or u['id'],
+        'wechat': {
+            'app_id': wc.get('app_id') or '',
+            # author 是非敏感的"显示作者名"，前端可能要展示
+            'author': wc.get('author') or '',
+        },
+        'xhs': {
+            'display_name': xhs.get('display_name') or '',
+        },
+        'toutiao': {
+            # 只出口端口号，不出口 user_data_dir / cookie 之类
+            'cdp_port': tt.get('cdp_port'),
+        },
         'wechat_count': len(db.list_drafts(u['id'], platform='wechat', status='ready', limit=999)),
         'xhs_count':    len(db.list_drafts(u['id'], platform='xhs',    status='ready', limit=999)),
     }
