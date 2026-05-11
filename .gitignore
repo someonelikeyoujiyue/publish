@@ -33,3 +33,7 @@ Thumbs.db
 
 # ── uv ──────────────────────────────────────────────────────────────────────
 .python-version
+
+# React 前端
+web/node_modules/
+web/dist/

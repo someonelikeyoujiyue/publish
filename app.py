@@ -9,11 +9,13 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from publisher_hub.config import load_config, load_prompts
 from publisher_hub.db import Database
 from publisher_hub.routes import admin, home, toutiao, users, wechat, xhs
+from publisher_hub.routes.api import api_router
 from publisher_hub.scheduler import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -49,6 +51,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title='Publisher Hub', lifespan=lifespan)
 
+# CORS：React dev server (5173) 跨端口调 /api/*
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
+# 新：JSON API（/api/*） —— React 前端调用
+app.include_router(api_router)
+
+# 旧：HTML 路由（保留作过渡 + 兜底降级）
 app.include_router(admin.router)        # 先于 home.router（/{user_id} 通配会吞 /admin）
 app.include_router(users.router)
 app.include_router(toutiao.router)      # /{user_id}/toutiao 是 2 段，跟 home /{user_id} 不冲突
