@@ -168,6 +168,20 @@ async def publish_weitoutiao(
             except Exception as e:
                 log.warning('[toutiao_publisher] %s 图片上传异常（继续发布）: %s', browser.user_id, e)
 
+            # 上传图片后再次清 drawer（图片插入 drawer 可能没自动关，拦后续 click）
+            try:
+                removed2 = await page.evaluate("""() => {
+                  const ms = document.querySelectorAll('.byte-drawer-mask, .byte-drawer-wrapper');
+                  ms.forEach(el => el.remove());
+                  return ms.length;
+                }""")
+                if removed2:
+                    log.info('[toutiao_publisher] %s 上传后再次清 %d 个 drawer',
+                             browser.user_id, removed2)
+                    await asyncio.sleep(0.3)
+            except Exception:
+                pass
+
         # 点发布 / 存草稿
         mode = 'draft' if save_draft_only else 'publish'
         btn_sel = '.save-draft' if save_draft_only else '.publish-co'
@@ -175,7 +189,8 @@ async def publish_weitoutiao(
             btn = await page.wait_for_selector(f'{btn_sel}:not([disabled])', timeout=8_000)
             if not btn:
                 return {'ok': False, 'error': f'找不到按钮 {btn_sel}'}
-            await btn.click()
+            # force=True 跳过 actionability check，防 drawer 残留 mask 拦截
+            await btn.click(force=True, timeout=10_000)
         except Exception as e:
             return {'ok': False, 'error': f'点击按钮失败: {e}'}
 
