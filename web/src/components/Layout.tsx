@@ -7,69 +7,65 @@ export function Layout() {
   const { pathname } = useLocation()
   const { data } = useQuery({ queryKey: ['users'], queryFn: api.listUsers })
   const users = data?.users ?? []
+  const currentUser = users.find((u) => u.id === userId)
 
   return (
-    <div className="flex h-full">
-      {/* Sidebar */}
-      <aside className="w-60 border-r border-slate-200 bg-white flex flex-col">
-        <Link to="/" className="px-4 py-4 border-b border-slate-200 font-semibold text-slate-900 hover:bg-slate-50">
-          📦 Publisher Hub
-        </Link>
-        <nav className="flex-1 overflow-y-auto py-2">
-          {users.map((u) => (
-            <Link
-              key={u.id}
-              to={`/${u.id}/wechat`}
-              className={`block px-4 py-2 text-sm hover:bg-slate-50 ${
-                userId === u.id ? 'bg-violet-50 text-violet-700 font-medium' : 'text-slate-700'
-              }`}
-            >
-              <div>{u.name}</div>
-              <div className="text-xs text-slate-500 mt-0.5">
-                📰 {u.wechat_count} · 🌹 {u.xhs_count}
-              </div>
+    <div className="min-h-full">
+      {/* Top nav */}
+      <nav className="bg-white border-b border-slate-200 px-7 py-3.5 flex items-center gap-3 sticky top-0 z-20">
+        <Link to="/" className="font-bold text-brand-700">📤 Publisher Hub</Link>
+        {currentUser && (
+          <>
+            <span className="text-slate-400">/</span>
+            <Link to={`/${currentUser.id}`} className="font-semibold text-slate-800">
+              {currentUser.name}
             </Link>
-          ))}
-          <Link
-            to="/users/new"
-            className="block px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 mt-2 border-t border-slate-200"
-          >
-            ＋ 新增用户
-          </Link>
-          <Link
-            to="/admin"
-            className={`block px-4 py-2 text-sm hover:bg-slate-50 ${
-              pathname === '/admin' ? 'bg-violet-50 text-violet-700 font-medium' : 'text-slate-700'
-            }`}
-          >
-            ⚙ 管理
-          </Link>
-        </nav>
-      </aside>
+          </>
+        )}
+        <span className="flex-1" />
+        <Link to="/" className="text-slate-500 text-sm hover:text-brand-700">所有用户</Link>
+        <Link to="/admin" className={`text-sm ${pathname === '/admin' ? 'text-brand-700 font-medium' : 'text-slate-500 hover:text-brand-700'}`}>
+          ⚙ 管理
+        </Link>
+      </nav>
 
-      {/* Main */}
-      <main className="flex-1 overflow-y-auto">
-        {userId && <PlatformTabs userId={userId} />}
-        <div className="p-6 max-w-5xl mx-auto">
-          <Outlet />
+      {/* Tabs (only on user pages) */}
+      {currentUser && (
+        <div className="bg-white border-b-2 border-slate-200">
+          <div className="max-w-[1180px] mx-auto px-7 flex gap-1">
+            <TabLink to={`/${currentUser.id}/wechat`}  active={pathname.startsWith(`/${currentUser.id}/wechat`)}>📰 公众号<Pill>{currentUser.wechat_count}</Pill></TabLink>
+            <TabLink to={`/${currentUser.id}/xhs`}     active={pathname.startsWith(`/${currentUser.id}/xhs`)}>🌹 小红书<Pill>{currentUser.xhs_count}</Pill></TabLink>
+            <TabLink to={`/${currentUser.id}/toutiao`} active={pathname.startsWith(`/${currentUser.id}/toutiao`)}>📱 今日头条</TabLink>
+          </div>
         </div>
-      </main>
+      )}
+
+      <div className="max-w-[1180px] mx-auto px-7 py-7">
+        <Outlet />
+      </div>
     </div>
   )
 }
 
-function PlatformTabs({ userId }: { userId: string }) {
-  const { pathname } = useLocation()
-  const tab = (k: 'wechat' | 'xhs' | 'toutiao') => pathname.startsWith(`/${userId}/${k}`)
-  const cls = (active: boolean) =>
-    `px-4 py-3 text-sm font-medium border-b-2 ${
-      active ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-    }`
+function TabLink({ to, active, children }: { to: string; active: boolean; children: React.ReactNode }) {
   return (
-    <div className="flex gap-1 border-b border-slate-200 bg-white sticky top-0 z-10">
-      <Link to={`/${userId}/wechat`}   className={cls(tab('wechat'))}>📰 公众号</Link>
-      <Link to={`/${userId}/xhs`}      className={cls(tab('xhs'))}>🌹 小红书</Link>
-      <Link to={`/${userId}/toutiao`}  className={cls(tab('toutiao'))}>📱 今日头条</Link>
-    </div>
+    <Link
+      to={to}
+      className={`px-5 py-2.5 -mb-[2px] border-b-2 text-[15px] transition ${
+        active
+          ? 'border-brand-700 text-brand-700 font-bold'
+          : 'border-transparent text-slate-500 hover:text-brand-700 font-medium'
+      }`}
+    >
+      {children}
+    </Link>
+  )
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="ml-1.5 inline-block px-2 py-px text-[11px] bg-slate-100 text-slate-500 rounded-full align-middle">
+      {children}
+    </span>
   )
 }

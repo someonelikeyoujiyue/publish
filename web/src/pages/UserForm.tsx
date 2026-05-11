@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { Btn, Flash } from '@/components/ui'
 
 function Form({ mode, defaultValues }: {
   mode: 'new' | 'edit'
@@ -34,78 +35,73 @@ function Form({ mode, defaultValues }: {
     },
   })
 
+  const inputCls = 'w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-50 disabled:bg-slate-50'
+
   return (
     <div className="max-w-lg">
-      <h1 className="text-xl font-semibold mb-4">
+      <h2 className="text-lg font-semibold mb-4">
         {mode === 'new' ? '新增用户' : `编辑 ${defaultValues.id}`}
-      </h1>
+      </h2>
       <form
         onSubmit={(e) => { e.preventDefault(); m.mutate() }}
-        className="bg-white border border-slate-200 rounded p-5 space-y-4"
+        className="bg-white border border-slate-200 rounded-lg p-6 space-y-4"
       >
-        <div>
-          <label className="block text-sm text-slate-600 mb-1">用户 ID</label>
+        <Field label="用户 ID" hint="小写字母/数字/下划线/连字符，1-32 字">
           <input
             value={form.id}
             onChange={(e) => setForm({ ...form, id: e.target.value })}
             disabled={mode === 'edit'}
-            placeholder="小写字母/数字/_-，1-32 字"
-            className="w-full border border-slate-300 rounded px-3 py-1.5 text-sm disabled:bg-slate-50"
+            className={inputCls + ' font-mono'}
             required
           />
-        </div>
-        <div>
-          <label className="block text-sm text-slate-600 mb-1">显示名</label>
+        </Field>
+        <Field label="显示名">
           <input
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="w-full border border-slate-300 rounded px-3 py-1.5 text-sm"
+            className={inputCls}
             required={mode === 'new'}
           />
-        </div>
-        <div>
-          <label className="block text-sm text-slate-600 mb-1">公众号 AppID</label>
+        </Field>
+        <Field label="公众号 AppID">
           <input
             value={form.wechat_app_id}
             onChange={(e) => setForm({ ...form, wechat_app_id: e.target.value })}
-            className="w-full border border-slate-300 rounded px-3 py-1.5 text-sm font-mono"
+            className={inputCls + ' font-mono'}
             required={mode === 'new'}
           />
-        </div>
-        <div>
-          <label className="block text-sm text-slate-600 mb-1">
-            公众号 AppSecret {mode === 'edit' && <span className="text-slate-400">（留空不改）</span>}
-          </label>
+        </Field>
+        <Field label="公众号 AppSecret" hint={mode === 'edit' ? '留空不改' : undefined}>
           <input
             type="password"
             value={form.wechat_app_secret}
             onChange={(e) => setForm({ ...form, wechat_app_secret: e.target.value })}
-            className="w-full border border-slate-300 rounded px-3 py-1.5 text-sm font-mono"
+            className={inputCls + ' font-mono'}
             required={mode === 'new'}
           />
-        </div>
-        {m.error && (
-          <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
-            {(m.error as Error).message}
-          </div>
-        )}
+        </Field>
+
+        {m.error && <Flash tone="error">{(m.error as Error).message}</Flash>}
+
         <div className="flex gap-2 pt-2">
-          <button
-            type="submit"
-            disabled={m.isPending}
-            className="px-4 py-1.5 bg-violet-600 text-white rounded text-sm hover:bg-violet-700 disabled:opacity-50"
-          >
+          <Btn type="submit" loading={m.isPending}>
             {m.isPending ? '保存中…' : '保存'}
-          </button>
-          <button
-            type="button"
-            onClick={() => nav('/')}
-            className="px-4 py-1.5 border border-slate-300 rounded text-sm hover:bg-slate-50"
-          >
-            取消
-          </button>
+          </Btn>
+          <Btn type="button" variant="secondary" onClick={() => nav('/')}>取消</Btn>
         </div>
       </form>
+    </div>
+  )
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="flex justify-between items-baseline mb-1">
+        <span className="text-sm text-slate-700 font-medium">{label}</span>
+        {hint && <span className="text-xs text-slate-400">{hint}</span>}
+      </label>
+      {children}
     </div>
   )
 }
@@ -127,8 +123,7 @@ export function UserEdit() {
     <Form
       mode="edit"
       defaultValues={{
-        id: data.id,
-        name: data.name,
+        id: data.id, name: data.name,
         wechat_app_id: data.wechat.app_id || '',
       }}
     />

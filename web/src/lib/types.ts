@@ -19,6 +19,8 @@ export interface DraftSummary {
   created_at: string
   pushed_at: string | null
   error: string | null
+  cover: string
+  image_count: number
 }
 
 export interface DraftDetail extends DraftSummary {
