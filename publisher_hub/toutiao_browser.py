@@ -67,10 +67,17 @@ class ToutiaoBrowser:
         self.cdp_port       = int(cdp_port)
         self.user_data_dir  = _data_root() / f'toutiao-{user_id}'
         self.chrome_path    = _find_chrome()
-        # 状态缓存：HTMX 频繁轮询时复用，避免重复 page.goto
+        # 三层缓存策略，避免每次都开 page.goto：
+        # 1. 内存缓存 _cache_result：15 秒内任何 check_login 调用直接返回
+        # 2. 快路径：只读 cookie 判 logged_in/logged_out（不开 page，~1s）
+        # 3. 完整路径（开 page + 提取 name）：每 5 分钟最多跑一次
         self._cache_result: Optional[dict] = None
         self._cache_at: float = 0.0
-        self._cache_ttl: float = 5.0       # 5 秒内复用结果（足够防 HTMX 过载）
+        self._cache_ttl: float = 15.0
+        self._cached_name: str = ''
+        self._cached_exp_days: Optional[int] = None
+        self._last_full_check_at: float = 0.0
+        self._full_check_interval: float = 300.0  # 5 分钟跑一次 page check
 
     # ── 进程管理（同步即可，subprocess.Popen 不阻塞）────────────────────
 
@@ -156,6 +163,57 @@ class ToutiaoBrowser:
 
     # ── 登录态检查 ────────────────────────────────────────────────────────
 
+    # 头条号已登录必有的 session cookie（任意一个出现 = logged_in）
+    _SESSION_COOKIES = {
+        'sessionid', 'sid_tt', 'sid_guard', 'uid_tt',
+        'uid_tt_ss', 'sid_ucp_v1', 'ssid_ucp_v1',
+    }
+
+    async def _fast_check(self) -> Optional[dict]:
+        """快路径：只读 cookie，不开 page。秒级返回。
+
+        返回 None 表示 fast check 拿不到 cookie（连不上 CDP）—— 调用方回退到完整 check。
+        """
+        from playwright.async_api import async_playwright
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.connect_over_cdp(
+                    f'http://127.0.0.1:{self.cdp_port}'
+                )
+                try:
+                    if not browser.contexts:
+                        return None
+                    ctx = browser.contexts[0]
+                    cookies = await ctx.cookies()
+                finally:
+                    await browser.close()
+        except Exception as e:
+            log.debug('[toutiao] %s fast_check 异常: %s', self.user_id, e)
+            return None
+
+        names = {c.get('name', '').lower() for c in cookies}
+        if not (names & self._SESSION_COOKIES):
+            return {'status': 'logged_out', 'reason': 'no_session_cookie'}
+
+        # 计算 cookie 过期天数
+        exp_days = None
+        for c in cookies:
+            n = c.get('name', '').lower()
+            if 'session' in n or n == 'sid' or 'sso' in n:
+                exp = c.get('expires', -1)
+                if exp > 0:
+                    exp_days = max(0, int((exp - time.time()) / 86400))
+                    break
+        if exp_days is not None:
+            self._cached_exp_days = exp_days
+
+        return {
+            'status': 'logged_in',
+            'name': self._cached_name,
+            'cookie_expires_days': exp_days if exp_days is not None else self._cached_exp_days,
+            'via': 'fast',
+        }
+
     async def check_login(self, force: bool = False) -> dict:
         if not force and self._cache_result and (time.time() - self._cache_at) < self._cache_ttl:
             return self._cache_result
@@ -165,6 +223,19 @@ class ToutiaoBrowser:
             self._cache_result, self._cache_at = result, time.time()
             return result
 
+        # 1. 快路径：只读 cookie
+        fast = await self._fast_check()
+        if fast and fast['status'] == 'logged_out':
+            self._cache_result, self._cache_at = fast, time.time()
+            return fast
+
+        # 2. logged_in：5 分钟内已跑过完整 check + 已有 name → 直接返回快路径结果
+        if fast and not force and self._cached_name and \
+                (time.time() - self._last_full_check_at) < self._full_check_interval:
+            self._cache_result, self._cache_at = fast, time.time()
+            return fast
+
+        # 3. 完整 check：开 page 提取 name（5 分钟跑一次，或还没拿到 name，或 force）
         async def _do(page, ctx):
             try:
                 await page.goto(
@@ -280,7 +351,19 @@ class ToutiaoBrowser:
             result = await self._with_page_async(_do)
         except Exception as e:
             log.warning('[toutiao] %s check_login 整体异常: %s', self.user_id, e)
-            result = {'status': 'logged_out', 'reason': f'check_exception: {e}'}
+            # 完整 check 失败但快路径说 logged_in → 信快路径
+            if fast and fast['status'] == 'logged_in':
+                result = fast
+            else:
+                result = {'status': 'logged_out', 'reason': f'check_exception: {e}'}
+
+        # 记完整 check 结果 + 缓存 name
+        if result.get('status') == 'logged_in':
+            self._last_full_check_at = time.time()
+            if result.get('name'):
+                self._cached_name = result['name']
+            if result.get('cookie_expires_days') is not None:
+                self._cached_exp_days = result['cookie_expires_days']
 
         self._cache_result, self._cache_at = result, time.time()
         return result
