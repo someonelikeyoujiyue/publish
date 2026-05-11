@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import tempfile
 import urllib.request
 from typing import Optional
@@ -19,16 +18,9 @@ log = logging.getLogger('publisher_hub.toutiao_publisher')
 
 PUBLISH_URL = 'https://mp.toutiao.com/profile_v4/weitoutiao/publish'
 
-# image_urls 在数据库里都是 http://47.236.168.208:8899/img/... —— 服务器内部
-# 走 127.0.0.1 更快、不依赖公网
-_INTERNAL_HOST_REWRITE = re.compile(r'^https?://(47\.236\.168\.208|content\.yinimengyue\.top)(:\d+)?')
-
-
-def _local_url(url: str) -> str:
-    """改写 host 到本机 newmedia-web 实例（:8899）。"""
-    if not url:
-        return url
-    return _INTERNAL_HOST_REWRITE.sub('http://127.0.0.1:8899', url)
+# publisher-hub 现在跨机部署：图片服务在 47.236.168.208:8899（旧机），
+# publisher-hub 本身在 5.189.184.60。直接走公网 IP，不做 host 改写。
+# （早期版本同机部署时会改写成 127.0.0.1 走内网，跨机后改不掉就用原 URL。）
 
 
 def _download_images(urls: list[str], max_count: int = 9) -> list[str]:
@@ -36,7 +28,7 @@ def _download_images(urls: list[str], max_count: int = 9) -> list[str]:
     paths: list[str] = []
     tmpdir = tempfile.mkdtemp(prefix='toutiao_upload_')
     for i, raw in enumerate(urls[:max_count]):
-        url = _local_url(raw.strip())
+        url = raw.strip()
         if not url:
             continue
         try:
