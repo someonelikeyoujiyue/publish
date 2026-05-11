@@ -161,14 +161,49 @@ async def publish_weitoutiao(
                         timeout=10_000,
                     )
                     log.info('[toutiao_publisher] %s 已 setInputFiles %d 张', browser.user_id, len(image_paths))
-                    # 等图片上传完成。头条号上传一张约 1-3s，给宽限到每张 3s + 2s 兜底
-                    await asyncio.sleep(min(len(image_paths) * 3 + 2, 30))
                 except Exception as e:
                     log.warning('[toutiao_publisher] %s setInputFiles 失败: %s', browser.user_id, e)
+                    raise
+
+                # 等头条号"上传图片"抽屉里"已上传 N 张图片"计数到位（每张 1-5s）
+                n_files = len(image_paths)
+                try:
+                    await page.wait_for_function(
+                        f"""() => {{
+                          const el = document.querySelector('.upload-image-wrapper');
+                          if (!el) return false;
+                          const m = (el.innerText || '').match(/已上传\\s*(\\d+)\\s*张/);
+                          return m && parseInt(m[1]) >= {n_files};
+                        }}""",
+                        timeout=min(n_files * 8_000 + 3_000, 60_000),
+                    )
+                    log.info('[toutiao_publisher] %s ✓ 已上传 %d 张到面板', browser.user_id, n_files)
+                except Exception:
+                    log.warning('[toutiao_publisher] %s 等待"已上传 %d 张"超时（继续点确定）',
+                                browser.user_id, n_files)
+                await asyncio.sleep(0.8)
+
+                # 点抽屉里的"确定"按钮（必须点才会把图片插入正文 ProseMirror）
+                try:
+                    clicked = await page.evaluate("""() => {
+                      const drawer = document.querySelector('.byte-drawer-wrapper');
+                      if (!drawer) return 'no-drawer';
+                      const btns = Array.from(drawer.querySelectorAll('button'));
+                      const ok = btns.find(b => (b.innerText||'').trim() === '确定');
+                      if (!ok) return 'no-ok-btn';
+                      if (ok.disabled) return 'ok-disabled';
+                      ok.click();
+                      return 'clicked';
+                    }""")
+                    log.info('[toutiao_publisher] %s 点确定结果: %s', browser.user_id, clicked)
+                    # 等 drawer 关 + 图片插入 ProseMirror
+                    await asyncio.sleep(2.5)
+                except Exception as e:
+                    log.warning('[toutiao_publisher] %s 点确定失败: %s', browser.user_id, e)
             except Exception as e:
                 log.warning('[toutiao_publisher] %s 图片上传异常（继续发布）: %s', browser.user_id, e)
 
-            # 上传图片后再次清 drawer（图片插入 drawer 可能没自动关，拦后续 click）
+            # 兜底：如果还有 drawer 残留（极少数情况），清掉，避免拦 .save-draft / .publish-co
             try:
                 removed2 = await page.evaluate("""() => {
                   const ms = document.querySelectorAll('.byte-drawer-mask, .byte-drawer-wrapper');
@@ -176,7 +211,7 @@ async def publish_weitoutiao(
                   return ms.length;
                 }""")
                 if removed2:
-                    log.info('[toutiao_publisher] %s 上传后再次清 %d 个 drawer',
+                    log.info('[toutiao_publisher] %s 兜底清掉 %d 个残留 drawer',
                              browser.user_id, removed2)
                     await asyncio.sleep(0.3)
             except Exception:
