@@ -70,6 +70,10 @@ class ToutiaoBrowser:
         self.cdp_port       = int(cdp_port)
         self.user_data_dir  = _data_root() / f'toutiao-{user_id}'
         self.chrome_path    = _find_chrome()
+        # 状态缓存：HTMX 频繁轮询时复用，避免重复 page.goto
+        self._cache_result: Optional[dict] = None
+        self._cache_at: float = 0.0
+        self._cache_ttl: float = 30.0      # 30 秒内复用结果
 
     # ── 进程管理 ──────────────────────────────────────────────────────────
 
@@ -135,17 +139,39 @@ class ToutiaoBrowser:
 
     # ── 登录态检查 ────────────────────────────────────────────────────────
 
-    def check_login(self) -> dict:
-        """返回 {'status': 'logged_in'/'logged_out'/'error', ...}。"""
+    def check_login(self, force: bool = False) -> dict:
+        """返回 {'status': 'logged_in'/'logged_out'/'error', ...}。
+
+        Args:
+            force: True 时跳过缓存，强制 page.goto 真实检测
+        """
+        # 缓存命中（HTMX 频繁轮询时省 page.goto）
+        if not force and self._cache_result and (time.time() - self._cache_at) < self._cache_ttl:
+            return self._cache_result
+
         if not self.start():
-            return {'status': 'error', 'error': 'Chrome 启动失败'}
+            result = {'status': 'error', 'error': 'Chrome 启动失败'}
+            self._cache_result, self._cache_at = result, time.time()
+            return result
 
         def _do(page, ctx):
             try:
-                page.goto('https://mp.toutiao.com', wait_until='domcontentloaded', timeout=15_000)
+                # wait_until='commit'：HTTP 响应头收到就返回，不等所有资源
+                # timeout 30s（头条号 headless 加载偶尔慢）
+                page.goto('https://mp.toutiao.com', wait_until='commit', timeout=30_000)
             except Exception as e:
-                return {'status': 'error', 'error': f'page.goto: {e}'}
-            time.sleep(2)
+                log.warning('[toutiao] %s page.goto 超时/异常: %s', self.user_id, e)
+                # 失败时退而求其次：看当前 page.url（可能还停在上次的页面）
+                url = ''
+                try:
+                    url = page.url
+                except Exception:
+                    pass
+                # 实在拿不到 URL → 当作未登录（让用户重新扫码）
+                return {'status': 'logged_out', 'url': url, 'reason': 'goto_timeout'}
+
+            # 等少许时间让 redirect 完成
+            time.sleep(1)
             url = page.url
 
             # 未登录通常 redirect 到 sso.snssdk.com / passport / login
@@ -187,10 +213,19 @@ class ToutiaoBrowser:
             }
 
         try:
-            return self._with_page(_do)
+            result = self._with_page(_do)
         except Exception as e:
-            log.warning('[toutiao] %s check_login 异常: %s', self.user_id, e)
-            return {'status': 'error', 'error': str(e)}
+            log.warning('[toutiao] %s check_login 整体异常: %s', self.user_id, e)
+            # 不报 error 给前端，当作 logged_out（友好提示）
+            result = {'status': 'logged_out', 'reason': f'check_exception: {e}'}
+
+        self._cache_result, self._cache_at = result, time.time()
+        return result
+
+    def invalidate_cache(self):
+        """让下次 check_login 不走缓存（bind 后调用，加速看到登录状态）。"""
+        self._cache_result = None
+        self._cache_at = 0.0
 
     # ── 截二维码（整页 screenshot） ───────────────────────────────────────
 

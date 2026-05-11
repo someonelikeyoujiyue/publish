@@ -83,6 +83,7 @@ def bind(user_id: str, request: Request):
     try:
         browser = get_browser(user_id, int(port))
         img_data = browser.capture_login_page()
+        browser.invalidate_cache()      # 让下次 status 检测立刻跑（用户扫码后能尽快变绿）
     except Exception as e:
         log.exception('[toutiao] capture 路由层异常')
         return HTMLResponse(
