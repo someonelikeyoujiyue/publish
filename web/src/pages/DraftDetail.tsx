@@ -88,8 +88,8 @@ export function DraftDetail({ platform }: { platform: Platform }) {
             {data.pushed_at && <span>推送：{data.pushed_at}</span>}
           </div>
 
-          {data.error && (
-            <Flash tone="error">上次推送错误：{data.error}</Flash>
+          {data.status === 'failed' && data.error && (
+            <Flash tone="error">推送错误：{data.error}</Flash>
           )}
 
           {platform === 'wechat' ? (
