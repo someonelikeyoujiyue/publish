@@ -213,8 +213,12 @@ class ToutiaoBrowser:
                         'reason': 'no_session_cookie'}
 
             # 提取用户名：DOM 多 selector 尝试 + cookie 兜底
+            # 真实命中：.auth-avator-name （头条号 dashboard 顶部头像旁，注意 avator 是
+            # 他们的拼写错误，不是 avatar；两种都留着以防他们将来改正）
             name = ''
             for sel in [
+                '.auth-avator-name', '.auth-avatar-name',
+                '[class*="auth-avator-name"]', '[class*="auth-avatar-name"]',
                 '[class*="user-name"]', '[class*="username"]',
                 '[class*="UserName"]', '[class*="nickname"]',
                 '[class*="NickName"]', '[class*="user_name"]',
