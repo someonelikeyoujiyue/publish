@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from publisher_hub.config import load_config, load_prompts
 from publisher_hub.db import Database
-from publisher_hub.routes import admin, home, users, wechat, xhs
+from publisher_hub.routes import admin, home, toutiao, users, wechat, xhs
 from publisher_hub.scheduler import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -51,6 +51,7 @@ app = FastAPI(title='Publisher Hub', lifespan=lifespan)
 
 app.include_router(admin.router)        # 先于 home.router（/{user_id} 通配会吞 /admin）
 app.include_router(users.router)
+app.include_router(toutiao.router)      # /{user_id}/toutiao 是 2 段，跟 home /{user_id} 不冲突
 app.include_router(home.router)
 app.include_router(wechat.router)
 app.include_router(xhs.router)

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}今日头条 - {{ user.name }}{% endblock %}
+
+{% block content %}
+
+{# Tabs #}
+<div class="tabs">
+  <a href="/{{ user.id }}/wechat" class="tab">📰 公众号</a>
+  <a href="/{{ user.id }}/xhs" class="tab">🌹 小红书</a>
+  <a href="/{{ user.id }}/toutiao" class="tab active">📱 今日头条</a>
+</div>
+
+<div class="toolbar">
+  <h2>头条号绑定</h2>
+  <span style="color:var(--text-mid);font-size:13px;">
+    {% set tt = user.toutiao or {} %}
+    {% if tt.cdp_port %}CDP 端口 :{{ tt.cdp_port }}{% endif %}
+  </span>
+</div>
+
+<div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:24px;">
+
+  <div style="color:var(--text-mid);margin-bottom:18px;font-size:13px;line-height:1.7;">
+    每个用户独享一个 Chrome 实例 + 持久化 cookie。<br>
+    扫码绑定一次后，登录态长期有效（cookie 过期前会自动刷新）。
+  </div>
+
+  {# 状态卡片（HTMX 5s 轮询，扫码后自动检测） #}
+  <div id="toutiao-status"
+       hx-get="/{{ user.id }}/toutiao/status"
+       hx-trigger="load, every 5s"
+       hx-swap="innerHTML">
+    <span class="badge" style="padding:8px 12px;color:#64748b;background:#f1f5f9;">
+      <span class="spinner" style="border-color:rgba(15,118,110,0.25);border-top-color:#0f766e;"></span>
+      检测中…
+    </span>
+  </div>
+
+  <div style="margin-top:20px;display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn btn-primary"
+            hx-post="/{{ user.id }}/toutiao/bind"
+            hx-target="#toutiao-action"
+            hx-swap="innerHTML"
+            hx-disabled-elt="this"
+            hx-on::after-request="this.classList.remove('htmx-request')">
+      <span class="btn-text">📱 扫码绑定 / 重新绑定</span>
+      <span class="btn-loading">
+        <span class="spinner"></span> 启动 Chrome + 截二维码（10-30 秒）…
+      </span>
+    </button>
+
+    <button class="btn btn-secondary"
+            hx-post="/{{ user.id }}/toutiao/unbind"
+            hx-confirm="确认解绑头条号？会删除当前登录态 + Chrome user_data_dir，下次需要重新扫码。"
+            hx-target="#toutiao-action"
+            hx-swap="innerHTML">
+      🗑 解绑
+    </button>
+  </div>
+
+  <div id="toutiao-action" style="margin-top:20px;"></div>
+
+</div>
+
+{% endblock %}

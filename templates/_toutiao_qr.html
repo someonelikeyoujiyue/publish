@@ -1,0 +1,26 @@
+{# 扫码绑定 → 服务器 Chrome 截整页 → 前端展示 → 用户在图里找二维码扫 #}
+<div style="background:#fffbeb;border:2px solid #fcd34d;border-radius:8px;
+            padding:18px;max-width:760px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              margin-bottom:12px;">
+    <p style="margin:0;color:#78350f;font-size:14px;font-weight:600;line-height:1.5;">
+      📱 用今日头条 App / 微信扫码登录<br>
+      <span style="font-weight:normal;color:#92400e;font-size:12px;">
+        扫码后页面顶部状态会在 5 秒内自动变成"✓ 已登录"
+      </span>
+    </p>
+    <span style="color:#92400e;font-size:11px;background:#fef3c7;
+                 padding:2px 8px;border-radius:3px;">
+      CDP :{{ port }}
+    </span>
+  </div>
+
+  <img src="{{ img_data }}"
+       style="max-width:100%;border:1px solid #fde68a;border-radius:6px;
+              background:#fff;display:block;"
+       alt="头条号登录页">
+
+  <p style="margin:10px 0 0;color:#92400e;font-size:11px;text-align:center;">
+    若图里没有二维码（页面还在加载或被反爬挡了），等几秒再点"扫码绑定"重试一次
+  </p>
+</div>

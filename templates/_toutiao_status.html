@@ -1,0 +1,26 @@
+{% set s = state.status %}
+{% if s == 'unbound' %}
+  <span class="badge badge-failed" style="padding:8px 12px;background:#f1f5f9;color:#64748b;">
+    ⚪ 未绑定（点下方"扫码绑定"开始）
+  </span>
+{% elif s == 'logged_out' %}
+  <span class="badge badge-failed" style="padding:8px 12px;">
+    ✗ 已掉线 / 登录已失效
+  </span>
+  <span style="margin-left:8px;color:#94a3b8;font-size:12px;">
+    {{ state.url[:80] if state.url else '' }}
+  </span>
+{% elif s == 'logged_in' %}
+  <span class="badge badge-pushed" style="padding:8px 12px;">
+    ✓ 已登录：{{ state.name }}
+    {% if state.cookie_expires_days is not none %}
+      （cookie 剩 {{ state.cookie_expires_days }} 天）
+    {% endif %}
+  </span>
+{% elif s == 'error' %}
+  <span class="badge badge-failed" style="padding:8px 12px;">
+    ⚠ 检测出错：{{ state.error[:80] }}
+  </span>
+{% else %}
+  <span class="badge" style="padding:8px 12px;color:#64748b;">未知状态：{{ s }}</span>
+{% endif %}

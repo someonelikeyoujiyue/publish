@@ -207,6 +207,30 @@ def update_user(user_id: str,
     raise ValueError(f'用户 {user_id} 不存在')
 
 
+def set_user_toutiao_port(user_id: str, port: int) -> None:
+    """写 user.toutiao.cdp_port（首次绑头条号时分配）。"""
+    data = _load_yaml_for_write()
+    for u in data.get('users') or []:
+        if u.get('id') == user_id:
+            tt = u.setdefault('toutiao', {})
+            tt['cdp_port'] = int(port)
+            _save_yaml(data)
+            log.info('[config] %s toutiao.cdp_port=%d', user_id, port)
+            return
+    raise ValueError(f'用户 {user_id} 不存在')
+
+
+def unset_user_toutiao(user_id: str) -> None:
+    """解绑头条号（清 user.toutiao 段）。"""
+    data = _load_yaml_for_write()
+    for u in data.get('users') or []:
+        if u.get('id') == user_id and 'toutiao' in u:
+            u.pop('toutiao', None)
+            _save_yaml(data)
+            log.info('[config] %s toutiao 段已清', user_id)
+            return
+
+
 def delete_user(user_id: str) -> None:
     data = _load_yaml_for_write()
     users = data.get('users') or []
