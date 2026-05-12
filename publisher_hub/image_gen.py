@@ -47,8 +47,17 @@ class ImageGenerator:
         self.timeout  = float(ig.get('timeout_seconds', 180))
         self.enabled  = bool(self.api_key) and bool(ig.get('enabled', True))
 
-        # vision 识图：默认 qwen3.6-plus（newmedia 实证稳定）
-        self.vision_model = ig.get('vision_model', 'qwen3.6-plus')
+        # vision 识图：用独立的 vision 段配置（不再用 valueclue + qwen，换成
+        # 第三方 Gemini 网关，gemini-2.5-flash 视觉效果好、便宜）
+        vc = config.get('vision') or {}
+        self.vision_base_url = (vc.get('base_url') or '').rstrip('/')
+        self.vision_api_key  = (vc.get('api_key')  or '').strip()
+        self.vision_model    = vc.get('model', 'gemini-2.5-flash')
+        # 老配置兼容：image_gen.vision_model + llm.base_url（用于 fallback 到 qwen）
+        if not self.vision_base_url:
+            self.vision_base_url = self.base_url
+            self.vision_api_key  = self.api_key
+            self.vision_model    = ig.get('vision_model', 'qwen3.6-plus')
 
         # 反 AI 识别 + 永久 URL（newmedia 服务器侧 /img/hub-gen 挂载）
         ms = config.get('mysql') or {}
@@ -212,23 +221,81 @@ class ImageGenerator:
         img.save(out, format='JPEG', quality=random.randint(82, 92), optimize=True)
         return out.getvalue()
 
-    # ── 识图：把原帖图给 qwen3.6-plus 看，得到 ≤30 字描述 ─────────────────────
+    # ── 识图：下载图片 → 压缩 → Gemini 2.5-flash 看图 → 返回 ≤30 字中文描述 ─
+
+    _VISION_PROMPT = '用 30 字以内中文，简洁描述这张图片的主体、色调和氛围。只输出描述本身。'
 
     def analyze_image(self, image_url: str) -> str:
-        """用 vision 模型看图，返回简洁中文描述。失败返回 ''。"""
+        """用 vision 模型看图，返回简洁中文描述。失败返回 ''。
+
+        根据 vision_model 自动选协议：含 'gemini' 走 Gemini 原生
+        /v1beta/.../generateContent，否则走 OpenAI 兼容 /v1/chat/completions。
+        """
         if not self.enabled or not image_url:
             return ''
+        if not self.vision_base_url or not self.vision_api_key:
+            return ''
 
+        # 下载 + 压缩到 < 1MB（vision API 图大了慢且 token 贵）
         try:
-            # 下载图片转 base64（vision 模型走 base64 更稳，避免它访问 URL 有限制）
             with httpx.Client(timeout=30, proxy=self.proxy) as c:
                 r = c.get(image_url, follow_redirects=True)
             r.raise_for_status()
-            img_b64 = base64.b64encode(r.content).decode()
+            img = Image.open(io.BytesIO(r.content))
+            img.thumbnail((1024, 1024))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            out = io.BytesIO()
+            img.save(out, 'JPEG', quality=85)
+            img_b64 = base64.b64encode(out.getvalue()).decode()
         except Exception as e:
-            log.warning('[image_gen] 识图前下载失败 %s: %s', image_url[:60], e)
+            log.warning('[image_gen] 识图前下载/压缩失败 %s: %s', image_url[:60], e)
             return ''
 
+        if 'gemini' in self.vision_model.lower():
+            return self._analyze_gemini(img_b64)
+        return self._analyze_openai(img_b64)
+
+    def _analyze_gemini(self, img_b64: str) -> str:
+        """Gemini 原生协议 generateContent。
+        gemini-2.5-flash 默认开 thinking mode，要留够 maxOutputTokens 给 thoughts。
+        """
+        body = {
+            'contents': [{
+                'role': 'user',
+                'parts': [
+                    {'text': self._VISION_PROMPT},
+                    {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
+                ],
+            }],
+            'generationConfig': {
+                # 给 thinking + 最终输出留足空间（实测 thoughts ~400 + output ~50）
+                'maxOutputTokens': 1500,
+                'temperature': 0.3,
+            },
+        }
+        url = f'{self.vision_base_url}/v1beta/models/{self.vision_model}:generateContent'
+        try:
+            with httpx.Client(timeout=120) as c:
+                r = c.post(url, headers={
+                    'x-goog-api-key': self.vision_api_key,
+                    'Content-Type':   'application/json',
+                }, json=body)
+            if r.status_code >= 400:
+                log.warning('[image_gen] Gemini 识图 HTTP %d: %s',
+                            r.status_code, r.text[:300])
+                return ''
+            data = r.json()
+            parts = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', [])
+            desc = ''.join(p.get('text', '') for p in parts).strip().replace('\n', ' ')
+            log.info('[image_gen] ✓ Gemini 识图: %s', desc[:60])
+            return desc
+        except Exception as e:
+            log.warning('[image_gen] Gemini 识图调用失败: %s', e)
+            return ''
+
+    def _analyze_openai(self, img_b64: str) -> str:
+        """OpenAI 兼容协议（qwen3.6-plus / claude 视觉走这条）+ valueclue stream。"""
         body = {
             'model': self.vision_model,
             'messages': [{
@@ -236,35 +303,31 @@ class ImageGenerator:
                 'content': [
                     {'type': 'image_url',
                      'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
-                    {'type': 'text',
-                     'text': '用 30 字以内中文，简洁描述这张图片的主体、色调和氛围。只输出描述本身。'},
+                    {'type': 'text', 'text': self._VISION_PROMPT},
                 ],
             }],
             'max_tokens': 200,
-            'stream':     True,                 # valueclue 16.8s 硬超时，stream 绕过
+            'stream':     True,    # valueclue 16.8s 硬超时，stream 绕过
         }
-
         content_parts: list[str] = []
         try:
             with httpx.Client(timeout=120, proxy=self.proxy) as c:
-                with c.stream(
-                    'POST',
-                    f'{self.base_url}/chat/completions',
-                    headers={
-                        'Authorization': f'Bearer {self.api_key}',
-                        'Content-Type':  'application/json',
-                    },
-                    json=body,
-                ) as resp:
+                with c.stream('POST',
+                              f'{self.vision_base_url}/chat/completions',
+                              headers={
+                                  'Authorization': f'Bearer {self.vision_api_key}',
+                                  'Content-Type':  'application/json',
+                              },
+                              json=body) as resp:
                     if resp.status_code >= 400:
                         body_text = b''.join(resp.iter_bytes()).decode('utf-8', errors='replace')
-                        log.warning('[image_gen] 识图 HTTP %d: %s',
+                        log.warning('[image_gen] OpenAI 识图 HTTP %d: %s',
                                     resp.status_code, body_text[:300])
                         return ''
                     for line in resp.iter_lines():
+                        line = (line or '').strip()
                         if not line:
                             continue
-                        line = line.strip()
                         if line.startswith('data:'):
                             line = line[5:].strip()
                         if line == '[DONE]':
@@ -280,11 +343,10 @@ class ImageGenerator:
                         if c_text:
                             content_parts.append(c_text)
         except Exception as e:
-            log.warning('[image_gen] 识图调用失败: %s', e)
+            log.warning('[image_gen] OpenAI 识图调用失败: %s', e)
             return ''
-
         desc = ''.join(content_parts).strip().replace('\n', ' ')
-        log.info('[image_gen] ✓ 识图完成: %s', desc[:60])
+        log.info('[image_gen] ✓ OpenAI 识图: %s', desc[:60])
         return desc
 
     @staticmethod
