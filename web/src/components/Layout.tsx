@@ -1,13 +1,31 @@
+import { useEffect } from 'react'
 import { Link, Outlet, useParams, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import type { Platform } from '@/lib/types'
+
+const ALL_PLATFORMS: Platform[] = ['wechat', 'xhs', 'toutiao', 'douyin']
 
 export function Layout() {
   const { userId } = useParams()
   const { pathname } = useLocation()
+  const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['users'], queryFn: api.listUsers })
   const users = data?.users ?? []
   const currentUser = users.find((u) => u.id === userId)
+
+  // 进入某个用户的任意 tab 时，prefetch 其它 3 个 tab 的草稿列表
+  // 切 tab 时已经命中缓存，瞬间显示（跨区 SQL ~500ms 提前付掉）
+  useEffect(() => {
+    if (!userId) return
+    for (const p of ALL_PLATFORMS) {
+      qc.prefetchQuery({
+        queryKey: ['drafts', userId, p],
+        queryFn:  () => api.listDrafts(userId, p),
+        staleTime: 60_000,
+      })
+    }
+  }, [userId, qc])
 
   return (
     <div className="min-h-full">

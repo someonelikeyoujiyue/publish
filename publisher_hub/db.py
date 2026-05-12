@@ -218,6 +218,14 @@ class Database:
             log.warning('[db] save_draft 失败: %s', e)
             return 0
 
+    # list_drafts 用于列表展示，不需要 content/pushed_result 等大字段。
+    # 跨公网 100 行 LONGTEXT 可能 100KB+，跳过显著降低传输时间
+    _LIST_COLUMNS = (
+        'id', 'user_id', 'platform', 'source_post_id', 'title',
+        'image_urls', 'status', 'pushed_at', 'pushed_result', 'error_msg',
+        'created_at', 'updated_at',
+    )
+
     def list_drafts(
         self,
         user_id: str,
@@ -225,7 +233,8 @@ class Database:
         status: str | None = 'ready',
         limit: int = 50,
     ) -> list[dict]:
-        sql = "SELECT * FROM hub_drafts WHERE user_id=%s"
+        cols = ', '.join(self._LIST_COLUMNS)
+        sql = f"SELECT {cols} FROM hub_drafts WHERE user_id=%s"
         params: list = [user_id]
         if platform:
             sql += " AND platform=%s"
