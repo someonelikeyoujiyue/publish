@@ -5,8 +5,13 @@ import { api } from '@/lib/api'
 import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
 
-const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条' } as const
-const WEITT_PUBLISH_URL = 'https://mp.toutiao.com/profile_v4/weitoutiao/publish'
+const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条', douyin: '抖音图文' } as const
+
+// 各平台发布页（手动模式跳转用）
+const PUBLISH_URL: Partial<Record<Platform, string>> = {
+  toutiao: 'https://mp.toutiao.com/profile_v4/weitoutiao/publish',
+  douyin:  'https://creator.douyin.com/creator-micro/content/upload?default-tab=3',
+}
 
 export function DraftDetail({ platform }: { platform: Platform }) {
   const { userId = '', draftId = '' } = useParams()
@@ -124,8 +129,8 @@ export function DraftDetail({ platform }: { platform: Platform }) {
           <div className="bg-white rounded-lg border border-slate-200 p-5 sticky top-32">
             <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-3 font-medium">操作</div>
 
-            {/* ── 微头条：手动 + 自动 两种发布 ─────────────────────────── */}
-            {platform === 'toutiao' ? (
+            {/* ── 微头条 / 抖音：手动复制 + 跳转发布页 ─────────────────── */}
+            {(platform === 'toutiao' || platform === 'douyin') ? (
               <div className="space-y-3">
                 {/* 状态 */}
                 <div className="text-[12px] text-slate-500 pb-2 border-b border-slate-100">
@@ -137,9 +142,11 @@ export function DraftDetail({ platform }: { platform: Platform }) {
 
                 {/* 手动模式 */}
                 <div>
-                  <div className="text-xs font-semibold text-slate-700 mb-2">📋 手动发（推荐）</div>
+                  <div className="text-xs font-semibold text-slate-700 mb-2">
+                    📋 {platform === 'toutiao' ? '手动发（推荐）' : '手动发（抖音图文）'}
+                  </div>
                   <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
-                    复制内容 → 跳到头条发布页 → 在已登录的浏览器粘贴
+                    复制内容 → 跳到{PLATFORM_LABEL[platform]}发布页 → 在已登录的浏览器粘贴
                   </p>
                   <div className="space-y-1.5">
                     <Btn
@@ -147,7 +154,8 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                       className="w-full justify-center"
                       onClick={async () => {
                         await copyTo('all')
-                        window.open(WEITT_PUBLISH_URL, '_blank', 'noopener')
+                        const url = PUBLISH_URL[platform]
+                        if (url) window.open(url, '_blank', 'noopener')
                       }}
                     >
                       📋 复制 + 打开发布页
@@ -166,6 +174,8 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                   </div>
                 </div>
 
+                {/* 自动发只在头条号有（douyin 不做扫码+CDP） */}
+                {platform === 'toutiao' && (
                 <div className="border-t border-slate-100 pt-3">
                   <div className="text-xs font-semibold text-slate-700 mb-2">🚀 自动发（需绑定）</div>
                   {ttStatus?.status === 'logged_in' ? (
@@ -199,6 +209,7 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                     </p>
                   )}
                 </div>
+                )}
 
                 {(push.data?.ok === false || saveDraftOnly.data?.ok === false) && (
                   <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">

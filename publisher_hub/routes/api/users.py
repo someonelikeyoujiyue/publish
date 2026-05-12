@@ -51,6 +51,7 @@ def _serialize_user(u: dict, counts: dict[tuple[str, str], int]) -> dict:
         'wechat_count':  counts.get((uid, 'wechat'),  0),
         'xhs_count':     counts.get((uid, 'xhs'),     0),
         'toutiao_count': counts.get((uid, 'toutiao'), 0),
+        'douyin_count':  counts.get((uid, 'douyin'),  0),
     }
 
 

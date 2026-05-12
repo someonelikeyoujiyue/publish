@@ -36,6 +36,7 @@ export function Layout() {
             <TabLink to={`/${currentUser.id}/wechat`}  active={pathname.startsWith(`/${currentUser.id}/wechat`)}>📰 公众号<Pill>{currentUser.wechat_count}</Pill></TabLink>
             <TabLink to={`/${currentUser.id}/xhs`}     active={pathname.startsWith(`/${currentUser.id}/xhs`)}>🌹 小红书<Pill>{currentUser.xhs_count}</Pill></TabLink>
             <TabLink to={`/${currentUser.id}/toutiao`} active={pathname.startsWith(`/${currentUser.id}/toutiao`)}>📱 今日头条<Pill>{currentUser.toutiao_count}</Pill></TabLink>
+            <TabLink to={`/${currentUser.id}/douyin`}  active={pathname.startsWith(`/${currentUser.id}/douyin`)}>🎵 抖音<Pill>{currentUser.douyin_count}</Pill></TabLink>
           </div>
         </div>
       )}

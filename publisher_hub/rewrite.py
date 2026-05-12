@@ -30,10 +30,12 @@ from .rsu import DEFAULT_BASE_URL as RSU_DEFAULT_URL, pick_random as rsu_pick_ra
 # 按平台限制写入草稿的图片数（None = 不限）
 # wechat 2 张：公众号文章通常有封面 + 配图 1-2 张就够，多了挤压正文
 # toutiao 1 张：微头条体裁单图最干净，多图上传慢
+# douyin 3 张：抖音图文（用户手动粘贴 + 上传），3 张是抖音图文热门款式
 # xhs 不设上限：小红书走候选池机制（candidate_pool 内 LLM 选最优）
 _PLATFORM_MAX_IMAGES: dict[str, int] = {
     'wechat':  2,
     'toutiao': 1,
+    'douyin':  3,
 }
 
 log = logging.getLogger('publisher_hub.rewrite')
@@ -654,8 +656,9 @@ def main():
     )
     parser.add_argument('user_id', help='用户 ID（config.yaml 中定义）')
     parser.add_argument(
-        'platform', nargs='?', default=None, choices=['wechat', 'xhs', 'toutiao'],
-        help='只跑某个平台；省略=该用户的三个平台都跑',
+        'platform', nargs='?', default=None,
+        choices=['wechat', 'xhs', 'toutiao', 'douyin'],
+        help='只跑某个平台；省略=该用户的四个平台都跑',
     )
     parser.add_argument('--debug', action='store_true', help='输出 DEBUG 级别日志')
     args = parser.parse_args()
@@ -672,7 +675,7 @@ def main():
     db.connect()
 
     engine    = RewriteEngine(config, prompts)
-    platforms = [args.platform] if args.platform else ['wechat', 'xhs', 'toutiao']
+    platforms = [args.platform] if args.platform else ['wechat', 'xhs', 'toutiao', 'douyin']
 
     total = 0
     for p in platforms:

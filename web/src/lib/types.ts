@@ -7,9 +7,10 @@ export interface User {
   wechat_count: number
   xhs_count: number
   toutiao_count: number
+  douyin_count: number
 }
 
-export type Platform = 'wechat' | 'xhs' | 'toutiao'
+export type Platform = 'wechat' | 'xhs' | 'toutiao' | 'douyin'
 
 export type DraftStatus = 'ready' | 'pushed' | 'failed'
 

@@ -82,6 +82,21 @@ _HARDCODED_DEFAULTS = {
         'candidate_pool':    0,
         'rewrite_cron':      '0 8 * * *',
     },
+    'douyin': {
+        # 抖音图文：复用 toutiao_weitt prompt（信息密度风，跟头条/公众号一致）
+        # 用户在前端复制后跳转 creator.douyin.com 自己粘贴发布；不做扫码绑定/CDP
+        'sources': {
+            'platforms':  ['xiaohongshu', 'douyin'],
+            'categories': [],
+        },
+        'prompt':            'toutiao_weitt',
+        'rewrite_mode':      'per_post',
+        'rewrite_batch':     2,
+        'articles_per_batch': 0,
+        'pick_strategy':     'random',
+        'candidate_pool':    0,
+        'rewrite_cron':      '0 8 * * *',
+    },
 }
 
 

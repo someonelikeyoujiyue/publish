@@ -10,7 +10,7 @@ const STATUS_LABEL: Record<DraftStatus, { text: string; kind: 'ready' | 'pushed'
   failed: { text: '✗ 失败', kind: 'failed' },
 }
 
-const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条' } as const
+const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条', douyin: '抖音图文' } as const
 
 export function DraftList({ platform }: { platform: Platform }) {
   const { userId = '' } = useParams()
