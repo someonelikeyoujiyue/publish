@@ -259,7 +259,10 @@ class ImageGenerator:
     def _analyze_gemini(self, img_b64: str) -> str:
         """Gemini 原生协议 generateContent。
         gemini-2.5-flash 默认开 thinking mode，要留够 maxOutputTokens 给 thoughts。
+        网关账户池间歇性空，503 时自动重试（间隔 3s × 最多 3 次）。
         """
+        import time as _t
+
         body = {
             'contents': [{
                 'role': 'user',
@@ -269,30 +272,50 @@ class ImageGenerator:
                 ],
             }],
             'generationConfig': {
-                # 给 thinking + 最终输出留足空间（实测 thoughts ~400 + output ~50）
                 'maxOutputTokens': 1500,
                 'temperature': 0.3,
             },
         }
         url = f'{self.vision_base_url}/v1beta/models/{self.vision_model}:generateContent'
-        try:
-            with httpx.Client(timeout=120) as c:
-                r = c.post(url, headers={
-                    'x-goog-api-key': self.vision_api_key,
-                    'Content-Type':   'application/json',
-                }, json=body)
-            if r.status_code >= 400:
-                log.warning('[image_gen] Gemini 识图 HTTP %d: %s',
-                            r.status_code, r.text[:300])
+        headers = {
+            'x-goog-api-key': self.vision_api_key,
+            'Content-Type':   'application/json',
+        }
+
+        MAX_TRIES, BACKOFF = 3, 3
+        for attempt in range(MAX_TRIES):
+            try:
+                with httpx.Client(timeout=120) as c:
+                    r = c.post(url, headers=headers, json=body)
+            except Exception as e:
+                log.warning('[image_gen] Gemini 识图连接异常 (try %d/%d): %s',
+                            attempt + 1, MAX_TRIES, e)
+                if attempt < MAX_TRIES - 1:
+                    _t.sleep(BACKOFF)
+                    continue
                 return ''
-            data = r.json()
-            parts = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', [])
-            desc = ''.join(p.get('text', '') for p in parts).strip().replace('\n', ' ')
-            log.info('[image_gen] ✓ Gemini 识图: %s', desc[:60])
-            return desc
-        except Exception as e:
-            log.warning('[image_gen] Gemini 识图调用失败: %s', e)
-            return ''
+
+            # 503 = 账户池空，等几秒可能恢复
+            if r.status_code == 503 and attempt < MAX_TRIES - 1:
+                log.info('[image_gen] Gemini 503 账户池空，%ds 后重试 (%d/%d)',
+                         BACKOFF, attempt + 1, MAX_TRIES)
+                _t.sleep(BACKOFF)
+                continue
+            if r.status_code >= 400:
+                log.warning('[image_gen] Gemini 识图 HTTP %d (try %d/%d): %s',
+                            r.status_code, attempt + 1, MAX_TRIES, r.text[:200])
+                return ''
+
+            try:
+                data = r.json()
+                parts = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', [])
+                desc = ''.join(p.get('text', '') for p in parts).strip().replace('\n', ' ')
+                log.info('[image_gen] ✓ Gemini 识图 (try %d): %s', attempt + 1, desc[:60])
+                return desc
+            except Exception as e:
+                log.warning('[image_gen] Gemini 识图响应解析失败: %s', e)
+                return ''
+        return ''
 
     def _analyze_openai(self, img_b64: str) -> str:
         """OpenAI 兼容协议（qwen3.6-plus / claude 视觉走这条）+ valueclue stream。"""
