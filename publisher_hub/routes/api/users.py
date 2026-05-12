@@ -25,34 +25,32 @@ class UserUpdateBody(BaseModel):
     wechat_app_secret: str | None = None
 
 
-def _serialize_user(u: dict, db) -> dict:
+def _serialize_user(u: dict, counts: dict[tuple[str, str], int]) -> dict:
     """白名单序列化：只返回前端需要的字段。
 
-    敏感字段（app_secret / proxy 凭证 / cookie 等）一律不出口；
-    LLM/调度类配置（prompts / sources / cron）暂不暴露给前端，需要时再加。
+    counts: 由 db.count_all_drafts() 提供的 (user_id, platform) → 计数
+    敏感字段（app_secret / proxy 凭证 / cookie 等）一律不出口。
     """
     wc = u.get('wechat') or {}
     tt = u.get('toutiao') or {}
     xhs = u.get('xhs') or {}
+    uid = u['id']
     return {
-        'id':      u['id'],
-        'name':    u.get('name') or u['id'],
+        'id':      uid,
+        'name':    u.get('name') or uid,
         'wechat': {
             'app_id': wc.get('app_id') or '',
-            # author 是非敏感的"显示作者名"，前端可能要展示
             'author': wc.get('author') or '',
         },
         'xhs': {
             'display_name': xhs.get('display_name') or '',
         },
         'toutiao': {
-            # 只出口端口号，不出口 user_data_dir / cookie 之类
             'cdp_port': tt.get('cdp_port'),
         },
-        # 草稿总数（不区分 ready/pushed/failed），用于 sidebar/tab/卡片显示
-        'wechat_count':  len(db.list_drafts(u['id'], platform='wechat',  status=None, limit=999)),
-        'xhs_count':     len(db.list_drafts(u['id'], platform='xhs',     status=None, limit=999)),
-        'toutiao_count': len(db.list_drafts(u['id'], platform='toutiao', status=None, limit=999)),
+        'wechat_count':  counts.get((uid, 'wechat'),  0),
+        'xhs_count':     counts.get((uid, 'xhs'),     0),
+        'toutiao_count': counts.get((uid, 'toutiao'), 0),
     }
 
 
@@ -60,7 +58,8 @@ def _serialize_user(u: dict, db) -> dict:
 def list_users(request: Request):
     config = request.app.state.config
     db     = request.app.state.db
-    return {'users': [_serialize_user(u, db) for u in cfg.list_users(config)]}
+    counts = db.count_all_drafts()
+    return {'users': [_serialize_user(u, counts) for u in cfg.list_users(config)]}
 
 
 @router.get('/users/{user_id}')
@@ -87,7 +86,10 @@ def create_user(body: UserCreateBody, request: Request):
         log.error('[api/users] add_user 失败: %s', e, exc_info=True)
         raise HTTPException(500, str(e))
     cfg.reload_app_state(request.app)
-    return _serialize_user(cfg.get_user(request.app.state.config, uid), request.app.state.db)
+    return _serialize_user(
+        cfg.get_user(request.app.state.config, uid),
+        request.app.state.db.count_all_drafts(),
+    )
 
 
 @router.put('/users/{user_id}')
@@ -106,7 +108,10 @@ def update_user(user_id: str, body: UserUpdateBody, request: Request):
         log.error('[api/users] update_user 失败: %s', e, exc_info=True)
         raise HTTPException(500, str(e))
     cfg.reload_app_state(request.app)
-    return _serialize_user(cfg.get_user(request.app.state.config, user_id), request.app.state.db)
+    return _serialize_user(
+        cfg.get_user(request.app.state.config, user_id),
+        request.app.state.db.count_all_drafts(),
+    )
 
 
 @router.delete('/users/{user_id}', status_code=204)

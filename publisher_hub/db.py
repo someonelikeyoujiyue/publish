@@ -243,6 +243,24 @@ class Database:
             log.warning('[db] list_drafts 失败: %s', e)
             return []
 
+    def count_all_drafts(self) -> dict[tuple[str, str], int]:
+        """一次 SQL 拿全部 (user_id, platform) → count 映射。
+
+        替代过去 `len(list_drafts(limit=999))` 的反 pattern：
+        2 用户 × 3 平台 = 6 次跨机 SELECT * 拉全部行 ~3 秒
+        → 一次 GROUP BY COUNT(*) < 100ms。
+        """
+        try:
+            with self._cur() as cur:
+                cur.execute(
+                    "SELECT user_id, platform, COUNT(*) AS n FROM hub_drafts "
+                    "GROUP BY user_id, platform"
+                )
+                return {(r['user_id'], r['platform']): int(r['n']) for r in cur.fetchall()}
+        except Exception as e:
+            log.warning('[db] count_all_drafts 失败: %s', e)
+            return {}
+
     def get_draft(self, draft_id: int) -> dict | None:
         try:
             with self._cur() as cur:

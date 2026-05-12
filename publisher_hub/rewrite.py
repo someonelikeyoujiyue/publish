@@ -26,6 +26,16 @@ from .db import Database
 from .image_gen import ImageGenerator
 from .rsu import DEFAULT_BASE_URL as RSU_DEFAULT_URL, pick_random as rsu_pick_random
 
+
+# 按平台限制写入草稿的图片数（None = 不限）
+# wechat 2 张：公众号文章通常有封面 + 配图 1-2 张就够，多了挤压正文
+# toutiao 1 张：微头条体裁单图最干净，多图上传慢
+# xhs 不设上限：小红书走候选池机制（candidate_pool 内 LLM 选最优）
+_PLATFORM_MAX_IMAGES: dict[str, int] = {
+    'wechat':  2,
+    'toutiao': 1,
+}
+
 log = logging.getLogger('publisher_hub.rewrite')
 
 
@@ -133,9 +143,10 @@ class RewriteEngine:
             final_imgs = self.collect_images_for_draft(
                 post_imgs, category=post.get('category', ''),
             )
-            # 头条号微头条只配 1 张图（多了上传慢、用户体验也不好）
-            if platform == 'toutiao':
-                final_imgs = final_imgs[:1]
+            # 按平台体裁限制图片数（避免大图上传慢 + 多图反而稀释内容）
+            cap = _PLATFORM_MAX_IMAGES.get(platform)
+            if cap is not None:
+                final_imgs = final_imgs[:cap]
             db.save_draft(
                 user_id        = user_id,
                 platform       = platform,
@@ -208,6 +219,9 @@ class RewriteEngine:
             final_imgs = self.collect_images_for_draft(
                 all_imgs, category=chunk[0].get('category', ''),
             )
+            cap = _PLATFORM_MAX_IMAGES.get(platform)
+            if cap is not None:
+                final_imgs = final_imgs[:cap]
 
             db.save_draft(
                 user_id         = user_id,
