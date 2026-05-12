@@ -18,6 +18,17 @@ export function Home() {
 
   return (
     <>
+      <div className="bg-blue-50 border-l-4 border-blue-400 rounded p-4 mb-5 text-sm text-slate-700 leading-relaxed">
+        <div className="font-semibold text-blue-900 mb-2">📌 使用提示</div>
+        AI 生成的图片不一定完全符合文字内容，发布前请按各平台特性调整：
+        <ul className="mt-2 space-y-1 list-disc pl-5">
+          <li><b>📰 公众号</b>：自动推送到草稿箱，去 <a href="https://mp.weixin.qq.com" target="_blank" rel="noopener" className="text-brand-700 underline">公众号后台</a> 草稿箱里换图 + 群发</li>
+          <li><b>🌹 小红书</b>：点详情页推送 → 用手机扫码 → 进入小红书 App 后再改图 + 发布</li>
+          <li><b>📱 今日头条</b>：复制内容粘贴到 <a href="https://mp.toutiao.com" target="_blank" rel="noopener" className="text-brand-700 underline">头条号后台</a> 自己调整；或自动发后去草稿箱修改</li>
+          <li><b>🎵 抖音</b>：推荐复制内容粘贴到 <a href="https://creator.douyin.com" target="_blank" rel="noopener" className="text-brand-700 underline">抖音创作者中心</a> 手动上传图片发布</li>
+        </ul>
+      </div>
+
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-lg font-semibold">用户列表</h1>
         <BtnLink to="/users/new">＋ 新增用户</BtnLink>

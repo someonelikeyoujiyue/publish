@@ -63,19 +63,30 @@ function Form({ mode, defaultValues }: {
             required={mode === 'new'}
           />
         </Field>
+
+        <div className="text-xs text-slate-600 bg-amber-50 border-l-4 border-amber-300 rounded p-3 leading-relaxed">
+          <div className="font-semibold text-amber-900 mb-1">📝 公众号 AppID / AppSecret 怎么取</div>
+          1. 登录 <a href="https://mp.weixin.qq.com/" target="_blank" rel="noopener" className="underline text-brand-700">mp.weixin.qq.com</a> 公众号后台<br />
+          2. 左侧菜单 → 「设置与开发」 → 「基本配置」<br />
+          3. 「公众号开发信息」区域复制 <b>开发者 ID(AppID)</b><br />
+          4. AppSecret 点旁边的「重置」（注意：旧 AppSecret 会立即失效）→ 短信验证后显示完整值
+        </div>
+
         <Field label="公众号 AppID">
           <input
             value={form.wechat_app_id}
             onChange={(e) => setForm({ ...form, wechat_app_id: e.target.value })}
+            placeholder="wx 开头的 18 位字符串"
             className={inputCls + ' font-mono'}
             required={mode === 'new'}
           />
         </Field>
-        <Field label="公众号 AppSecret" hint={mode === 'edit' ? '留空不改' : undefined}>
+        <Field label="公众号 AppSecret" hint={mode === 'edit' ? '留空不改' : '32 位 hex 字符串'}>
           <input
             type="password"
             value={form.wechat_app_secret}
             onChange={(e) => setForm({ ...form, wechat_app_secret: e.target.value })}
+            placeholder="32 位 hex"
             className={inputCls + ' font-mono'}
             required={mode === 'new'}
           />
