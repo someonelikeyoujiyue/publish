@@ -45,9 +45,9 @@ _HARDCODED_DEFAULTS = {
         },
         'prompt':            'wechat_article',
         'rewrite_mode':      'batch',
-        'rewrite_batch':     10,
-        'articles_per_batch': 2,
-        # 取数策略：从最近 50 条池里 Python 随机抽 10 条素材综合写
+        # 减小服务器压力：每次只综合写 1 篇；素材池从 50 拿 5 条够用
+        'rewrite_batch':      5,
+        'articles_per_batch': 1,
         'pick_strategy':     'recent_random',
         'recent_pool':       50,
         'rewrite_cron':      '0 8 * * *',
@@ -59,12 +59,11 @@ _HARDCODED_DEFAULTS = {
         },
         'prompt':            'xhs_note',
         'rewrite_mode':      'per_post',
-        'rewrite_batch':     2,
+        # 每次只生成 1 条；候选池 3 个让 LLM 挑最优
+        'rewrite_batch':     1,
         'articles_per_batch': 0,
-        # 取数策略：全池 ORDER BY RAND() 完全随机（fxj 池 999+ 条多样性更好）
         'pick_strategy':     'random',
-        # 候选池：先随机取 candidate_pool 个 → 识图 → LLM 选最好的 rewrite_batch 个
-        'candidate_pool':    5,
+        'candidate_pool':    3,
         'rewrite_cron':      '0 8 * * *',
     },
     'toutiao': {
@@ -75,10 +74,9 @@ _HARDCODED_DEFAULTS = {
         },
         'prompt':            'toutiao_weitt',
         'rewrite_mode':      'per_post',
-        'rewrite_batch':     2,
+        'rewrite_batch':     1,
         'articles_per_batch': 0,
         'pick_strategy':     'random',
-        # 不走候选池+识图（candidate_pool=0），直接随机抽 batch 条仿写
         'candidate_pool':    0,
         'rewrite_cron':      '0 8 * * *',
     },
@@ -91,7 +89,7 @@ _HARDCODED_DEFAULTS = {
         },
         'prompt':            'toutiao_weitt',
         'rewrite_mode':      'per_post',
-        'rewrite_batch':     2,
+        'rewrite_batch':     1,
         'articles_per_batch': 0,
         'pick_strategy':     'random',
         'candidate_pool':    0,
