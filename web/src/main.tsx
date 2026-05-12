@@ -8,14 +8,14 @@ import { App } from './App'
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // 控制机 ↔ 旧机 MySQL ping RTT 244ms，每次 SQL ~500ms 不可避免。
-      // 用更长的 staleTime + 切 tab 时显示旧数据，让 UI 感知瞬间响应
-      staleTime: 60_000,            // 60s 内不重新拉
+      // 平衡：先显示旧数据避免空白闪烁，但同时后台 refetch 拉最新。
+      // 这样 cron / 外部触发产生的新草稿，用户切 tab 就能自动看到。
+      staleTime: 15_000,            // 15s 内不重新拉
       gcTime:    5 * 60_000,        // 5min 内保留缓存
       retry:     1,
-      refetchOnWindowFocus: false,
-      refetchOnMount:       false,  // 进入页面如果缓存还在 fresh 期就不重拉
-      placeholderData: (prev: unknown) => prev,  // 切 key 时先显示旧数据再悄悄刷
+      refetchOnWindowFocus: true,   // 切回浏览器 tab 自动刷新
+      refetchOnMount:       'always', // 每次进入页面后台刷新
+      placeholderData: (prev: unknown) => prev,  // 但先显示旧数据，无空白
     },
   },
 })
