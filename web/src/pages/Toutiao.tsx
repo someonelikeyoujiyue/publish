@@ -55,6 +55,18 @@ export function Toutiao() {
 
   return (
     <>
+      {/* ── 绑定说明 ───────────────────────────────────────────── */}
+      <div className="bg-amber-50 border-l-4 border-amber-400 rounded p-4 mb-4 text-sm text-slate-700 leading-relaxed">
+        <div className="font-semibold text-amber-900 mb-1">⚠ 是否绑定头条号？</div>
+        <div className="mb-2">
+          <b>绑定后</b>：服务器用你的浏览器 cookie 帮你 <span className="text-emerald-700">自动推送到草稿箱 / 自动发布</span>，每条草稿一键完成。
+          但平台风控可能识别自动化行为，<span className="text-red-700">存在封号风险</span>，请自行评估。
+        </div>
+        <div>
+          <b>不绑定</b>：每次进草稿详情点「📋 复制 + 打开发布页」，自己粘贴 + 改图 + 点发布，<span className="text-emerald-700">零风险</span>，但要手动操作。
+        </div>
+      </div>
+
       {/* ── 绑定卡 ─────────────────────────────────────────────── */}
       <div className="bg-white rounded-lg border border-slate-200 p-5 mb-6">
         <div className="flex items-center justify-between mb-3">
