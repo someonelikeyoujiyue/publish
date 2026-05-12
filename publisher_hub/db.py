@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import pymysql
 
@@ -35,7 +36,12 @@ CREATE TABLE IF NOT EXISTS hub_drafts (
 
 
 class Database:
-    """同步 pymysql 封装；进程内单实例。"""
+    """同步 pymysql 封装。
+
+    并发安全：FastAPI 把 sync def 路由跑在 thread pool（默认 40 个并发），
+    多线程**共享一个 pymysql 连接会导致协议帧交叉**（'Packet sequence number
+    wrong'）。这里给每个 thread 独立连接（threading.local），互不干扰。
+    """
 
     def __init__(self, config: dict):
         cfg = config['mysql']
@@ -44,31 +50,53 @@ class Database:
         self.user     = cfg['user']
         self.password = cfg['password']
         self.database = cfg['database']
-        self._conn    = None
+        self._local   = threading.local()
 
     # ── 连接管理 ──────────────────────────────────────────────────────
 
-    def connect(self):
-        self._conn = pymysql.connect(
+    def _new_conn(self):
+        return pymysql.connect(
             host=self.host, port=self.port,
             user=self.user, password=self.password,
             database=self.database, charset='utf8mb4',
             autocommit=True,
             cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=10,
+            read_timeout=60,
+            write_timeout=30,
         )
+
+    @property
+    def _conn(self):
+        """每个线程独立连接（thread-local），断了自动重连。"""
+        c = getattr(self._local, 'conn', None)
+        if c is not None:
+            try:
+                c.ping(reconnect=True)
+                return c
+            except Exception:
+                try: c.close()
+                except Exception: pass
+                self._local.conn = None
+        c = self._new_conn()
+        self._local.conn = c
+        log.info('[db] thread %s 新连接 %s:%d/%s',
+                 threading.current_thread().name, self.host, self.port, self.database)
+        return c
+
+    def connect(self):
+        """初始化主线程连接 + 建表（lifespan 启动调用）。"""
+        _ = self._conn
         self._ensure_hub_drafts_table()
-        log.info('[db] 已连接 %s:%d/%s', self.host, self.port, self.database)
 
     def close(self):
-        if self._conn and self._conn.open:
-            self._conn.close()
-        self._conn = None
+        c = getattr(self._local, 'conn', None)
+        if c is not None:
+            try: c.close()
+            except Exception: pass
+            self._local.conn = None
 
     def _cur(self):
-        try:
-            self._conn.ping(reconnect=True)
-        except Exception:
-            self.connect()
         return self._conn.cursor()
 
     def _ensure_hub_drafts_table(self):
