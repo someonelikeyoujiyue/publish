@@ -1,11 +1,13 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { isAdmin } from '@/lib/auth'
 import { BtnLink, Btn, Card, Empty } from '@/components/ui'
 
 export function Home() {
   const qc  = useQueryClient()
   const nav = useNavigate()
+  const admin = isAdmin()
   const { data, isLoading } = useQuery({ queryKey: ['users'], queryFn: api.listUsers })
 
   const del = useMutation({
@@ -31,11 +33,11 @@ export function Home() {
 
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-lg font-semibold">用户列表</h1>
-        <BtnLink to="/users/new">＋ 新增用户</BtnLink>
+        {admin && <BtnLink to="/users/new">＋ 新增用户</BtnLink>}
       </div>
 
       {users.length === 0 ? (
-        <Empty icon="👤" title="还没有用户" action={<BtnLink to="/users/new">新增第一个用户</BtnLink>} />
+        <Empty icon="👤" title="还没有用户" action={admin ? <BtnLink to="/users/new">新增第一个用户</BtnLink> : undefined} />
       ) : (
         <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
           {users.map((u) => (
@@ -54,26 +56,32 @@ export function Home() {
                 <Link to={`/${u.id}/wechat`} className="flex-1 text-center py-1.5 text-sm bg-brand-50 text-brand-700 rounded hover:bg-brand-100">
                   进入 →
                 </Link>
-                <Link to={`/users/${u.id}/edit`} className="px-3 py-1.5 text-sm text-slate-500 hover:text-brand-700">编辑</Link>
-                <Btn
-                  variant="ghost"
-                  className="!px-2 !py-1.5 text-xs hover:!text-red-600"
-                  onClick={() => {
-                    if (confirm(`确认删除用户「${u.name}」？\n（草稿不会删，但用户配置会清空）`)) del.mutate(u.id)
-                  }}
-                >
-                  删除
-                </Btn>
+                {admin && (
+                  <>
+                    <Link to={`/users/${u.id}/edit`} className="px-3 py-1.5 text-sm text-slate-500 hover:text-brand-700">编辑</Link>
+                    <Btn
+                      variant="ghost"
+                      className="!px-2 !py-1.5 text-xs hover:!text-red-600"
+                      onClick={() => {
+                        if (confirm(`确认删除用户「${u.name}」？\n（草稿不会删，但用户配置会清空）`)) del.mutate(u.id)
+                      }}
+                    >
+                      删除
+                    </Btn>
+                  </>
+                )}
               </div>
             </Card>
           ))}
 
-          <button
-            onClick={() => nav('/users/new')}
-            className="bg-white border-2 border-dashed border-slate-300 rounded-lg p-5 text-slate-400 hover:border-brand-700 hover:text-brand-700 transition flex items-center justify-center min-h-[180px]"
-          >
-            ＋ 新增用户
-          </button>
+          {admin && (
+            <button
+              onClick={() => nav('/users/new')}
+              className="bg-white border-2 border-dashed border-slate-300 rounded-lg p-5 text-slate-400 hover:border-brand-700 hover:text-brand-700 transition flex items-center justify-center min-h-[180px]"
+            >
+              ＋ 新增用户
+            </button>
+          )}
         </div>
       )}
     </>

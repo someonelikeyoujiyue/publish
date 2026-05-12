@@ -4,13 +4,14 @@ from __future__ import annotations
 import logging
 
 import markdown2
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ...config import get_user
 from ...feishu import FeishuBot
 from ...rewrite import RewriteEngine
 from ...wechat import WeChatPublisher
 from ._helpers import parse_images
+from .auth import require_admin
 
 log = logging.getLogger('publisher_hub.api.wechat')
 router = APIRouter()
@@ -71,7 +72,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
 
 
 @router.post('/users/{user_id}/wechat/refresh')
-def refresh(user_id: str, request: Request):
+def refresh(user_id: str, request: Request, _=Depends(require_admin)):
     config  = request.app.state.config
     prompts = request.app.state.prompts
     db      = request.app.state.db

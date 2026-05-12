@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { isAdmin } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
 import type { ToutiaoStatus, DraftStatus } from '@/lib/types'
 
@@ -13,6 +14,7 @@ const STATUS_LABEL: Record<DraftStatus, { text: string; kind: 'ready' | 'pushed'
 export function Toutiao() {
   const { userId = '' } = useParams()
   const qc = useQueryClient()
+  const admin = isAdmin()
 
   // ── 绑定状态 ──────────────────────────────────────────────────
   const { data: status } = useQuery({
@@ -119,9 +121,11 @@ export function Toutiao() {
           微头条草稿
           <span className="ml-2 text-[13px] text-slate-400 font-normal">{drafts.length} 条</span>
         </h2>
-        <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>
-          {refresh.isPending ? '仿写中…（30-90s）' : '⟳ 立即仿写'}
-        </Btn>
+        {admin && (
+          <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>
+            {refresh.isPending ? '仿写中…（30-90s）' : '⟳ 立即仿写'}
+          </Btn>
+        )}
       </div>
 
       {refresh.data?.ok === false && <Flash tone="error">✗ 仿写失败：{refresh.data.error}</Flash>}
@@ -129,7 +133,8 @@ export function Toutiao() {
 
       {drafts.length === 0 ? (
         <Empty icon="✍️" title="还没有微头条草稿" action={
-          <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>立即仿写</Btn>
+          admin ? <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>立即仿写</Btn>
+                : <p className="text-xs text-slate-400">等管理员仿写或定时任务</p>
         } />
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">

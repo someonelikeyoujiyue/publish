@@ -1,14 +1,25 @@
 import type {
   User, Platform, DraftSummary, DraftDetail, ToutiaoStatus, BindResult,
 } from './types'
+import { getToken, clearSession } from './auth'
 
 const BASE = '/api'
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  })
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  // 透传 Bearer token；登录/me 接口也带（无害）
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  if (init?.headers) Object.assign(headers, init.headers as Record<string, string>)
+
+  const res = await fetch(BASE + path, { ...init, headers })
+  if (res.status === 401) {
+    // token 过期 / 失效 → 清掉本地 session，跳 login
+    clearSession()
+    if (!location.pathname.startsWith('/login')) {
+      location.href = '/login?reason=expired'
+    }
+  }
   if (!res.ok) {
     const text = await res.text()
     let msg = text
@@ -17,6 +28,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T
   return res.json()
+}
+
+interface LoginResp { token: string; role: 'admin' | 'user'; expires_at: number }
+export const authApi = {
+  login:  (username: string, password: string) =>
+    req<LoginResp>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  logout: () =>
+    req<{ ok: boolean }>('/logout', { method: 'POST', body: '{}' }),
+  me:     () =>
+    req<{ role: 'admin' | 'user'; expires_at: number }>('/me'),
 }
 
 export const api = {

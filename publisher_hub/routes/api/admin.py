@@ -4,10 +4,11 @@ from __future__ import annotations
 import logging
 import threading
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from ... import scheduler as sch
+from .auth import require_admin
 
 log = logging.getLogger('publisher_hub.api.admin')
 router = APIRouter()
@@ -18,7 +19,7 @@ class RunNowBody(BaseModel):
 
 
 @router.post('/admin/run-now')
-def run_now(body: RunNowBody, request: Request):
+def run_now(body: RunNowBody, request: Request, _=Depends(require_admin)):
     target = (body.user_id or '').strip() or None
     log.info('[api/admin] 手动触发 daily_run target_user=%s', target or '(全部)')
     threading.Thread(

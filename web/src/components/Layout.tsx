@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
-import { Link, Outlet, useParams, useLocation } from 'react-router-dom'
+import { Link, Outlet, useParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, authApi } from '@/lib/api'
+import { getRole, clearSession } from '@/lib/auth'
 import type { Platform } from '@/lib/types'
 
 const ALL_PLATFORMS: Platform[] = ['wechat', 'xhs', 'toutiao', 'douyin']
@@ -9,10 +10,19 @@ const ALL_PLATFORMS: Platform[] = ['wechat', 'xhs', 'toutiao', 'douyin']
 export function Layout() {
   const { userId } = useParams()
   const { pathname } = useLocation()
+  const nav = useNavigate()
   const qc = useQueryClient()
+  const role = getRole()
   const { data } = useQuery({ queryKey: ['users'], queryFn: api.listUsers })
   const users = data?.users ?? []
   const currentUser = users.find((u) => u.id === userId)
+
+  const handleLogout = async () => {
+    try { await authApi.logout() } catch { /* ignore */ }
+    clearSession()
+    qc.clear()
+    nav('/login', { replace: true })
+  }
 
   // 进入某个用户的任意 tab 时，prefetch 其它 3 个 tab 的草稿列表
   // 切 tab 时已经命中缓存，瞬间显示（跨区 SQL ~500ms 提前付掉）
@@ -42,9 +52,17 @@ export function Layout() {
         )}
         <span className="flex-1" />
         <Link to="/" className="text-slate-500 text-sm hover:text-brand-700">所有用户</Link>
-        <Link to="/admin" className={`text-sm ${pathname === '/admin' ? 'text-brand-700 font-medium' : 'text-slate-500 hover:text-brand-700'}`}>
-          ⚙ 管理
-        </Link>
+        {role === 'admin' && (
+          <Link to="/admin" className={`text-sm ${pathname === '/admin' ? 'text-brand-700 font-medium' : 'text-slate-500 hover:text-brand-700'}`}>
+            ⚙ 管理
+          </Link>
+        )}
+        <span className={`text-[11px] px-2 py-0.5 rounded ${role === 'admin' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+          {role === 'admin' ? '👑 管理员' : '👤 用户'}
+        </span>
+        <button onClick={handleLogout} className="text-slate-500 text-sm hover:text-red-600">
+          退出
+        </button>
       </nav>
 
       {/* Tabs (only on user pages) */}

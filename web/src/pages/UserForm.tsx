@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { isAdmin } from '@/lib/auth'
 import { Btn, Flash } from '@/components/ui'
 
 function Form({ mode, defaultValues }: {
@@ -118,11 +119,13 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 export function UserNew() {
+  if (!isAdmin()) return <Navigate to="/" replace />
   return <Form mode="new" defaultValues={{ id: '', name: '', wechat_app_id: '' }} />
 }
 
 export function UserEdit() {
   const { userId = '' } = useParams()
+  if (!isAdmin()) return <Navigate to="/" replace />
   const { data, isLoading } = useQuery({
     queryKey: ['user', userId],
     queryFn: () => api.getUser(userId),

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ... import config as cfg
+from .auth import require_admin
 
 log = logging.getLogger('publisher_hub.api.users')
 router = APIRouter()
@@ -74,7 +75,7 @@ def get_user(user_id: str, request: Request):
 
 
 @router.post('/users', status_code=201)
-def create_user(body: UserCreateBody, request: Request):
+def create_user(body: UserCreateBody, request: Request, _=Depends(require_admin)):
     config = request.app.state.config
     uid = body.id.strip().lower()
     err = cfg.validate_user_id(uid, config, allow_existing=False)
@@ -94,7 +95,7 @@ def create_user(body: UserCreateBody, request: Request):
 
 
 @router.put('/users/{user_id}')
-def update_user(user_id: str, body: UserUpdateBody, request: Request):
+def update_user(user_id: str, body: UserUpdateBody, request: Request, _=Depends(require_admin)):
     config = request.app.state.config
     if not cfg.get_user_raw(config, user_id):
         raise HTTPException(404)
@@ -116,7 +117,7 @@ def update_user(user_id: str, body: UserUpdateBody, request: Request):
 
 
 @router.delete('/users/{user_id}', status_code=204)
-def delete_user(user_id: str, request: Request):
+def delete_user(user_id: str, request: Request, _=Depends(require_admin)):
     try:
         cfg.delete_user(user_id)
     except ValueError as e:

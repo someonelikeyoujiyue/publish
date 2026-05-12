@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ... import config as cfg
 from ...config import get_user
@@ -15,6 +15,7 @@ from ...toutiao_browser import get_browser
 from ...toutiao_publisher import publish_weitoutiao
 from ...feishu import FeishuBot
 from ._helpers import parse_images
+from .auth import require_admin
 
 log = logging.getLogger('publisher_hub.api.toutiao_drafts')
 router = APIRouter()
@@ -69,7 +70,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
 
 
 @router.post('/users/{user_id}/toutiao/refresh')
-def refresh(user_id: str, request: Request):
+def refresh(user_id: str, request: Request, _=Depends(require_admin)):
     config  = request.app.state.config
     prompts = request.app.state.prompts
     db      = request.app.state.db
