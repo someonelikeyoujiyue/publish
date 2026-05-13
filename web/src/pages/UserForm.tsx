@@ -126,12 +126,13 @@ export function UserNew() {
 export function UserEdit() {
   const { userId = '' } = useParams()
   if (!isAdmin()) return <Navigate to="/" replace />
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['user', userId],
     queryFn: () => api.getUser(userId),
     enabled: !!userId,
   })
   if (isLoading) return <p className="text-slate-500">加载中…</p>
+  if (error) return <Flash tone="error">加载失败：{(error as Error).message}</Flash>
   if (!data) return <p className="text-slate-500">用户不存在</p>
   return (
     <Form
