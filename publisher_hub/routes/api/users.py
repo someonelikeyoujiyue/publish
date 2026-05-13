@@ -71,7 +71,7 @@ def get_user(user_id: str, request: Request):
     user   = cfg.get_user(config, user_id)
     if not user:
         raise HTTPException(404, f'用户 {user_id} 不存在')
-    return _serialize_user(user, db)
+    return _serialize_user(user, db.count_all_drafts())
 
 
 @router.post('/users', status_code=201)
