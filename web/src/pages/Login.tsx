@@ -46,7 +46,6 @@ export function Login() {
               value={form.username}
               onChange={(e) => setForm({ ...form, username: e.target.value })}
               className={inputCls}
-              placeholder="admin / user"
               required
             />
           </div>

@@ -175,6 +175,11 @@ class RewriteEngine:
             if start < len(posts):
                 chunks.append(posts[start:end])
 
+        # 拉取该用户该平台最近 30 天的标题（含未发出的），注入 prompt 强制去重
+        recent_titles_block = self._recent_titles_block(db, user_id, platform, days=30)
+        # 本次 batch 已生成的标题（同一 daily_run 内的两篇也要避免重复）
+        used_in_this_run: list[str] = []
+
         count = 0
         for i, chunk in enumerate(chunks):
             parts = []
@@ -193,11 +198,16 @@ class RewriteEngine:
                 continue
 
             posts_text = '\n\n'.join(parts)
+            # 拼接 recent_titles：DB 中近 30 天 + 本 run 已生成
+            extra = '\n'.join(f'- {t}' for t in used_in_this_run)
+            recent_block_full = (recent_titles_block + ('\n' + extra if extra else '')
+                                  ) or '（暂无）'
             try:
                 prompt = tmpl.format(
-                    posts         = posts_text,
-                    post_count    = len(parts),
-                    article_index = i + 1,
+                    posts          = posts_text,
+                    post_count     = len(parts),
+                    article_index  = i + 1,
+                    recent_titles  = recent_block_full,
                 )
             except KeyError as e:
                 log.warning('[rewrite] batch 模板缺少占位符: %s', e)
@@ -234,11 +244,37 @@ class RewriteEngine:
                 content         = new_content,
                 image_urls      = ','.join(final_imgs),
             )
+            if new_title:
+                used_in_this_run.append(new_title)
             log.info('[rewrite] ✓ %s/%s batch[%d/%d] → %s (素材%d条)',
                      user_id, platform, i + 1, len(chunks),
                      (new_title or '')[:30], len(chunk))
             count += 1
         return count
+
+    # ── 去重：拉最近标题给 prompt 用 ──────────────────────────────────
+
+    def _recent_titles_block(
+        self, db: Database, user_id: str, platform: str, days: int = 30, limit: int = 20,
+    ) -> str:
+        """拉该用户该平台最近 N 天的 title，返回 prompt 友好的列表文本。"""
+        try:
+            with db._cur() as cur:
+                cur.execute(
+                    "SELECT title FROM hub_drafts WHERE user_id=%s AND platform=%s "
+                    "AND created_at >= NOW() - INTERVAL %s DAY "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (user_id, platform, days, limit),
+                )
+                rows = cur.fetchall()
+        except Exception as e:
+            log.warning('[rewrite] 拉 recent_titles 失败: %s', e)
+            return ''
+        titles = [(r.get('title') or '').strip() for r in rows]
+        titles = [t for t in titles if t]
+        if not titles:
+            return ''
+        return '\n'.join(f'- {t}' for t in titles)
 
     # ── LLM 调用 ──────────────────────────────────────────────────────
 
