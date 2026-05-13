@@ -87,7 +87,11 @@ def _resolve_role(creds: HTTPAuthorizationCredentials | None) -> str | None:
 
 def require_admin(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)):
     role = _resolve_role(creds)
+    if role is None:
+        # 未登录 / token 过期 / 服务重启清掉 token —— 401 让前端清缓存跳 /login
+        raise HTTPException(401, 'login required')
     if role != 'admin':
+        # 真正的权限不足（user 角色访问 admin 端点）
         raise HTTPException(403, 'admin only')
     return role
 
