@@ -133,6 +133,7 @@ def _process_user_toutiao(user: dict, app):
 
 
 def _process_user_xhs(user: dict, app):
+    """小红书只仿写不推送 —— 二维码生成由用户在前端按钮触发（节省 myaibot 调用 + 二维码本身有有效期，cron 提前生成意义不大）。"""
     config  = app.state.config
     prompts = app.state.prompts
     db      = app.state.db
@@ -150,42 +151,7 @@ def _process_user_xhs(user: dict, app):
         bot.push_failed(name, 'xhs', '(仿写阶段)', str(e))
         return
 
-    log.info('[cron] %s/xhs 新增草稿 %d 条', uid, n)
-
-    publisher = XhsPublisher(config)
-    drafts = db.list_drafts(uid, platform='xhs', status='ready', limit=20)
-    log.info('[cron] %s/xhs 待生成二维码 %d 条', uid, len(drafts))
-
-    pushed_ok = 0
-    for d in drafts:
-        images = [u.strip() for u in (d.get('image_urls') or '').split(',') if u.strip()]
-        try:
-            result = publisher.push(
-                title=d.get('title') or '',
-                content=d.get('content') or '',
-                images=images,
-            )
-        except Exception as e:
-            log.exception('[cron] %s/xhs draft=%s push 异常', uid, d['id'])
-            db.mark_failed(d['id'], error_msg=str(e))
-            bot.push_failed(name, 'xhs', d.get('title') or '', str(e))
-            continue
-
-        if result.get('ok'):
-            qr = result.get('qr_url') or ''
-            db.mark_pushed(
-                d['id'],
-                pushed_result=json.dumps({'qr_url': qr}, ensure_ascii=False),
-            )
-            extra = f'扫码：{qr[:80]}…' if qr else '已自动发布（无二维码）'
-            bot.push_success(name, 'xhs', d.get('title') or '', extra)
-            pushed_ok += 1
-        else:
-            err = result.get('error', '未知错误')
-            db.mark_failed(d['id'], error_msg=err)
-            bot.push_failed(name, 'xhs', d.get('title') or '', err)
-
-    log.info('[cron] ✓ %s/xhs 推送成功 %d/%d', uid, pushed_ok, len(drafts))
+    log.info('[cron] ✓ %s/xhs 新增草稿 %d 条（不自动生成二维码，等用户点按钮）', uid, n)
 
 
 # ── 主入口：每天 8:00 跑一次 ──────────────────────────────────────────────

@@ -974,3 +974,245 @@ GET /{uid}/toutiao/status → check_login:
 - 多 myaibot token 池（不同用户用不同 token）
 - 仿写质量反馈（用户标记好/差，反哺 prompt 调优）
 - 真正启用 push_cron 自动推
+
+---
+
+## 13. 2026-05-11 → 2026-05-13 大幅迭代（当前架构基线）
+
+> 本节同步当前生产环境实际状态。前面 1-12 章是初版设计，部分内容已被本节
+> 替换/扩展。看下面这章了解"现在是什么样"。
+
+### 13.1 部署架构：跨机分工
+
+```
+浏览器（用户）
+   │  https://yinimengyue.cn   （SSL 自动续，Let's Encrypt）
+   ↓
+┌────────────────── 控制机 5.189.184.60（欧洲 VPS, 23GB 内存）──────────────────┐
+│  nginx :443      静态 React dist + /api/* 反代 + /img/* 跨机反代          │
+│  publisher-hub.service (uvicorn 127.0.0.1:8900)                            │
+│      KillMode=process（重启 unit 不杀 Chrome 子进程）                       │
+│  Chrome 实例（每个 toutiao 用户独立 CDP 端口 9230+）                          │
+│  React dist  /var/www/publisher-hub/dist                                    │
+└───────────┬─────────────────────────────────────────────────────────────────┘
+            │ 跨欧亚 RTT ~244ms（thread-local 连接，并发安全）
+            ↓
+┌────────────────── 旧机 47.236.168.208（中国大陆，2GB 内存）─────────────────┐
+│  MySQL :3306              newmedia 库 + hub_drafts 表                       │
+│  newmedia-web :8899       /img/cover /img/attach /img/rsu /img/hub-gen      │
+│  newmedia 爬虫            每日补 posts                                      │
+│  socks5-proxy :20356      docker 容器（go-socks5-proxy）—— wechat 推送绕 IP │
+│  publisher-hub.service    **已 systemctl mask，永久停**（内存不够）          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**关键决策**：
+- 控制机当应用层（CPU/内存富裕），旧机当数据层（爬虫继续跑）
+- MySQL 走公网 3306，跨机延迟 ~500ms/查询（thread-local + COUNT(*) 优化后可接受）
+- 图片走 nginx `/img/` 反代到旧机 :8899（HTTPS 同源避 Mixed Content）
+- 域名 `yinimengyue.cn`（根 + www）通过 certbot 签 SSL
+- 旧机的另一个域名 `content.yinimengyue.top` 仍可用但已废弃
+
+### 13.2 前后端分离
+
+- **后端 FastAPI** `publisher_hub/routes/api/`（19 个 JSON 端点）
+- **前端 React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + React Router**
+- 项目结构 `web/src/{pages,components,lib}`
+- 老的 HTML 路由（`templates/*.html` + `routes/{home,users,wechat,xhs,toutiao,admin}.py`）保留作过渡，**实际生产不用**
+
+### 13.3 数据库 schema 升级
+
+```sql
+-- 多平台扩展（5.11/5.12 ALTER）
+ALTER TABLE hub_drafts MODIFY platform
+  ENUM('wechat','xhs','toutiao','douyin') NOT NULL;
+```
+
+### 13.4 平台扩展（4 个 platform）
+
+| 平台 | 仿写模式 | prompt | 图片数 | 推送方式 |
+|------|---------|--------|--------|---------|
+| wechat | batch | wechat_article | 2 张 | 官方 API（SOCKS5 出旧机白名单 IP）|
+| xhs | per_post + 候选池 3 选 1 | xhs_note | 走 RSU 兜底 | myaibot 生成二维码 → 手机扫（**5.13 起不再 cron 自动生**，由用户点）|
+| toutiao | per_post | toutiao_weitt | 1 张 | CDP DOM 自动填表 + 发布 / 存草稿 |
+| douyin | per_post | toutiao_weitt（复用）| 3 张 | 用户复制 + 跳 creator.douyin.com 粘贴 |
+
+每个用户每平台 **每天 1 条**（不让服务器爆 + 控制 LLM 成本）。
+
+### 13.5 头条号扫码绑定（Phase 1 完成）
+
+- 每个用户独立 Chrome 实例 + 持久化 `user_data_dir`（CDP 9230/9231 …）
+- 扫码登录后 cookie 写盘永久（cookie 期内不用重扫）
+- 三层 check_login 缓存（15s 内存 / 5min name 重提取 / 快路径只读 cookie）
+- 关键 bug 历史（修过的）：
+  - `publish-assistant-old-drawer` mask 拦截点击 → DOM remove
+  - 「上传图片」抽屉里要点「确定」才插入正文（不能 remove）
+  - 19MB 大图卡死 setInputFiles → PIL 压缩到 2000px JPEG q85
+  - capture 后 page.close() 导致登录 poll 停 → 不 close，让 JS 持续 poll
+  - URL 稳定检测延到 10s（SPA redirect 慢）
+
+### 13.6 识图模型：qwen → Gemini 2.5-flash
+
+- 第三方网关 `http://36.50.84.45:8080`
+- Gemini 原生协议 `/v1beta/models/{model}:generateContent`
+- `x-goog-api-key` header + `contents:[{role:user, parts:[...]}]` 格式
+- thinking mode 自动开（要 maxOutputTokens >= 1500）
+- 网关账户池间歇性空（503），加重试 3 次 × 间隔 3s
+- 配置在 `config.yaml.vision.{base_url,api_key,model}`
+
+### 13.7 简单两级权限（admin / user）
+
+- **admin/fxj18383465677** 全功能
+- **user/123456** 只读 + 推送（不能仿写、编辑/删除/新增用户）
+- token 内存存储（重启清空），TTL 24h
+- 前端 localStorage + React Query 401 自动跳 /login
+- 后端 `Depends(require_admin)` 守护写端点
+
+### 13.8 性能优化（已做）
+
+| 优化点 | 效果 |
+|--------|------|
+| /api/users 改 COUNT(*) GROUP BY | 3000ms → 50ms |
+| list_drafts SELECT 列裁剪（去 content）| 100KB → 5KB 传输 |
+| Database thread-local 连接 | 解决 pymysql 协议帧错乱并发 bug |
+| 前端 staleTime 15s + placeholderData | 切 tab 体感瞬时 |
+| Layout prefetch 4 平台 drafts | 切 tab 缓存命中 |
+| nginx /img/ 缓存 7 天 | 图片首次加载后浏览器侧缓存 |
+
+### 13.9 仿写去重（防 LLM 输出重复标题）
+
+- prompts.yaml `wechat_article` 二段（标题公式）从完整示例改成结构骨架
+- 加 `{recent_titles}` 占位符，rewrite._batch 跑前查 DB 近 30 天 20 条 title 注入
+- 同 daily_run 内每生成一篇 push 到 `used_in_this_run`，下篇 prompt 可见
+
+### 13.10 当前 daily_run 流程（cron `0 8 * * *`）
+
+```
+For each user (fxj, wangaixin):
+  ▶ wechat   仿写 1 篇 → 官方 API 推到草稿箱（SOCKS5）
+  ▶ xhs      仿写 1 篇 → **不自动生二维码**（5.13 改，由用户前端点）
+  ▶ toutiao  仿写 1 篇 → **不自动推送**（由用户前端点）
+  ▶ douyin   仿写 1 篇 → **不推送**（用户复制 + 自己跳转粘贴）
+```
+
+每个用户每天产 4 条草稿；2 用户共 8 条。耗时 ~10-15 分钟。
+
+### 13.11 重要文件路径
+
+```
+publisher_hub/
+├── config.py              _HARDCODED_DEFAULTS + ruamel.yaml 写入
+├── db.py                  thread-local pymysql + count_all_drafts
+├── rewrite.py             _per_post / _batch / _per_post_xhs + 候选池
+├── image_gen.py           wan2.7 + RSU 兜底 + Gemini 识图
+├── toutiao_browser.py     扫码绑定 + check_login 三层缓存
+├── toutiao_publisher.py   CDP DOM 填表 + 图片上传 + drawer 处理
+├── scheduler.py           APScheduler cron + 4 platform 流程
+├── routes/api/            JSON API（auth/users/wechat/xhs/toutiao/
+│                          toutiao_drafts/douyin_drafts/admin）
+└── ...
+
+web/
+├── src/lib/{api.ts, auth.ts, types.ts}
+├── src/components/{Layout, ProtectedRoute, ui}.tsx
+└── src/pages/{Home, Login, UserForm, DraftList, DraftDetail,
+              Toutiao, Admin}.tsx
+```
+
+---
+
+## 14. 视频生成接入计划（Phase 5，未开始）
+
+### 14.1 背景
+
+`/Users/fengxiaoji/code/newmedia/tests/test_pixelle_video.py` 演示了 Pixelle-Video
+（AIDC-AI 开源项目，clone 在 `newmedia/vendor/pixelle-video`）的两种生成 pipeline：
+
+- **`generate`**：纯 AI 生（话题 → LLM 分镜文案 → Flux 生图 → TTS → ffmpeg 合成）
+- **`asset_based`**：用真实照片（图 + intent → 识图 → LLM 分镜 → TTS → 合成）
+
+依赖：
+- pixelle-video API 服务 :8000（LLM 文案接口）
+- RunningHub 云端 ComfyUI（生图/识图/TTS）key `2fc8c8388f8447588e7492778c134c9c`
+- 本地 ffmpeg（合成 mp4）
+- BGM 文件（`bgm/default.mp3`）
+
+输出：本地 mp4 文件路径，单条 30s 视频生成 5-10 分钟。
+
+### 14.2 集成方案（待用户拍板）
+
+**待决策点（按优先级）**：
+
+1. **目标平台**：先做哪个？
+   - 头条号视频（推荐，已有 Chrome CDP 基础设施）
+   - 抖音视频（最重要的视频平台）
+   - 微信视频号（独立的 channels.weixin.qq.com）
+2. **触发方式**：cron 自动 vs 用户点按钮（推荐用户手动，视频贵慢）
+3. **生成模式**：`asset_based` 复用 newmedia 帖子封面图（推荐）vs `generate` 纯 AI 生
+4. **推送方式**：自动上传（headless 文件 input）vs 半自动（下载链接 + 跳转）
+5. **Pixelle-Video 服务部署位置**：控制机 vs 旧机 vs 本地
+
+### 14.3 实施步骤（一旦决策定下）
+
+**Step 1：Pixelle-Video 服务部署**
+- 控制机/旧机 clone `vendor/pixelle-video`
+- `uv sync` 装依赖
+- 配 RunningHub key + valueclue LLM key
+- 启 API :8000，绑 127.0.0.1
+- 装 ffmpeg
+
+**Step 2：publisher-hub 加视频生成模块**
+```python
+# publisher_hub/video_gen.py（新）
+class VideoGenerator:
+    def __init__(self, config): ...
+    async def generate_asset_video(
+        self, assets: list[str], title: str, intent: str,
+        duration: int = 30,
+    ) -> Optional[str]:
+        """返回 mp4 文件路径，失败返回 None。"""
+        # POST http://127.0.0.1:8000/api/asset_video/...
+```
+
+**Step 3：数据库 schema 扩展**
+```sql
+ALTER TABLE hub_drafts ADD COLUMN content_type
+  ENUM('text','video') NOT NULL DEFAULT 'text';
+ALTER TABLE hub_drafts ADD COLUMN video_path TEXT;
+ALTER TABLE hub_drafts ADD COLUMN video_url  TEXT;  -- 上传到永久存储后的公网 URL
+```
+
+**Step 4：仿写引擎扩展**
+- `rewrite.py` 加 video 分支：识图 → LLM 生 intent → 调 VideoGenerator → 存 video_path/url
+- scheduler 加 `_process_user_video(user, app)` (可选)
+
+**Step 5：上传 publisher**
+- 头条号：`toutiao_video_publisher.py` 走 CDP 进 `/profile_v4/video/publish` → setInputFiles(mp4) → 填标题/简介 → 发布/存草稿
+- 抖音：手动模式，前端给下载链接 + 跳 creator.douyin.com 视频发布页
+
+**Step 6：前端**
+- 详情页加 video 草稿渲染：`<video controls src={...}>` 预览
+- 操作栏按 content_type 显示不同按钮（文章: 现有；视频: "🎬 上传到头条号" / "⬇ 下载 + 跳抖音"）
+- toutiao tab 增加内容类型 toggle（图文 / 视频）
+
+### 14.4 成本估算
+
+- RunningHub: 单条 30s 视频 ~0.5-1 RMB（图片生成 + TTS）
+- 本地 ffmpeg: 免费但慢
+- Gemini 识图: 复用已有 vision 通道（asset 数 × ~0.0005 USD）
+- 每天 1 用户 1 条视频 → 月 30 条 ≈ 30 元 + 一些 LLM 成本
+- 用户手动触发模式更安全（不会日跑 8 条爆开销）
+
+### 14.5 风险点
+
+- **存储**：mp4 ~5-20MB/条，需要决定存哪（旧机 newmedia-web 加 `/img/hub-video/` 类似 hub-gen，或者直接 RunningHub OSS URL）
+- **headless Chrome 上传大文件**：之前实测 19MB 图就让 setInputFiles 超时，视频 ~10MB 边缘
+- **审核风控**：视频自动发布触发风控概率比图文高，建议默认存草稿模式
+- **生成时长**：5-10 分钟一条，用户点击后的 UX 要做异步任务 + 进度条 + 飞书通知（不能让前端 HTTP 等 10 分钟）
+
+### 14.6 不在本次范围
+
+- 视频质量评分 / 自动重生
+- 多镜头剪辑模板
+- 真人配音（目前只支持 TTS）
+- 视频水印 / 字幕
