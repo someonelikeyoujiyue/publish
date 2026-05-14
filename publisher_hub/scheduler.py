@@ -36,6 +36,7 @@ _run_lock = threading.Lock()
 # ── 单用户单平台的完整流程（仿写 → 推送 → 通知）─────────────────────────────
 
 def _process_user_wechat(user: dict, app):
+    """公众号只仿写不推送 —— 推送由用户在前端按钮触发（跟 xhs/toutiao/douyin 一致）。"""
     config  = app.state.config
     prompts = app.state.prompts
     db      = app.state.db
@@ -53,39 +54,7 @@ def _process_user_wechat(user: dict, app):
         bot.push_failed(name, 'wechat', '(仿写阶段)', str(e))
         return
 
-    log.info('[cron] %s/wechat 新增草稿 %d 条', uid, n)
-
-    pcfg = user.get('wechat') or {}
-    if not pcfg.get('app_id') or not pcfg.get('app_secret'):
-        log.warning('[cron] %s/wechat app_id/secret 未配置，跳过推送', uid)
-        return
-
-    publisher = WeChatPublisher(pcfg)
-    drafts = db.list_drafts(uid, platform='wechat', status='ready', limit=20)
-    log.info('[cron] %s/wechat 待推送 %d 条', uid, len(drafts))
-
-    pushed_ok = 0
-    for d in drafts:
-        try:
-            result = publisher.push(d)
-        except Exception as e:
-            log.exception('[cron] %s/wechat draft=%s push 异常', uid, d['id'])
-            db.mark_failed(d['id'], error_msg=str(e))
-            bot.push_failed(name, 'wechat', d.get('title') or '', str(e))
-            continue
-
-        if result.get('ok'):
-            mid = result.get('media_id', '')
-            db.mark_pushed(d['id'], pushed_result=f'media_id={mid}')
-            bot.push_success(name, 'wechat', d.get('title') or '',
-                             f'media_id: `{mid}`  → 进 mp.weixin.qq.com 草稿箱手动群发')
-            pushed_ok += 1
-        else:
-            err = result.get('error', '未知错误')
-            db.mark_failed(d['id'], error_msg=err)
-            bot.push_failed(name, 'wechat', d.get('title') or '', err)
-
-    log.info('[cron] ✓ %s/wechat 推送成功 %d/%d', uid, pushed_ok, len(drafts))
+    log.info('[cron] ✓ %s/wechat 新增草稿 %d 条（不自动推送，等用户点按钮）', uid, n)
 
 
 def _process_user_douyin(user: dict, app):
