@@ -16,13 +16,14 @@ _HUB_DRAFTS_DDL = """
 CREATE TABLE IF NOT EXISTS hub_drafts (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     user_id         VARCHAR(50)  NOT NULL,
-    platform        ENUM('wechat','xhs','toutiao','douyin') NOT NULL,
+    platform        ENUM('wechat','xhs','toutiao','douyin','youtube') NOT NULL,
     source_post_id  INT          NOT NULL,
     source_post_ids TEXT,
     title           TEXT,
     content         LONGTEXT,
     image_urls      TEXT,
-    status          ENUM('ready','pushed','failed') DEFAULT 'ready',
+    source_url      TEXT,
+    status          ENUM('ready','processing','pushed','failed') DEFAULT 'ready',
     pushed_at       DATETIME,
     pushed_result   TEXT,
     error_msg       TEXT,
@@ -212,6 +213,7 @@ class Database:
         image_urls: str = '',
         source_post_ids: str = '',
         status: str = 'ready',
+        source_url: str = '',
     ) -> int:
         """插入草稿（同 user+platform+source_post_id 已存在则更新）。返回 id。"""
         try:
@@ -220,18 +222,19 @@ class Database:
                     """
                     INSERT INTO hub_drafts
                         (user_id, platform, source_post_id, source_post_ids,
-                         title, content, image_urls, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         title, content, image_urls, source_url, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         title           = VALUES(title),
                         content         = VALUES(content),
                         image_urls      = VALUES(image_urls),
                         source_post_ids = VALUES(source_post_ids),
+                        source_url      = VALUES(source_url),
                         status          = VALUES(status),
                         updated_at      = NOW()
                     """,
                     (user_id, platform, source_post_id, source_post_ids,
-                     title, content, image_urls, status),
+                     title, content, image_urls, source_url, status),
                 )
                 if cur.lastrowid:
                     return cur.lastrowid
@@ -246,12 +249,29 @@ class Database:
             log.warning('[db] save_draft 失败: %s', e)
             return 0
 
+    def set_draft_status(self, draft_id: int, status: str, error_msg: str = ''):
+        """通用 status 更新（youtube processing → pushed/failed 用）。"""
+        try:
+            with self._cur() as cur:
+                if error_msg:
+                    cur.execute(
+                        "UPDATE hub_drafts SET status=%s, error_msg=%s WHERE id=%s",
+                        (status, error_msg, draft_id),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE hub_drafts SET status=%s WHERE id=%s",
+                        (status, draft_id),
+                    )
+        except Exception as e:
+            log.warning('[db] set_draft_status 失败: %s', e)
+
     # list_drafts 用于列表展示，不需要 content/pushed_result 等大字段。
     # 跨公网 100 行 LONGTEXT 可能 100KB+，跳过显著降低传输时间
     _LIST_COLUMNS = (
         'id', 'user_id', 'platform', 'source_post_id', 'title',
-        'image_urls', 'status', 'pushed_at', 'pushed_result', 'error_msg',
-        'created_at', 'updated_at',
+        'image_urls', 'source_url', 'status', 'pushed_at', 'pushed_result',
+        'error_msg', 'created_at', 'updated_at',
     )
 
     def list_drafts(

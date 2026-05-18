@@ -7,6 +7,8 @@ import { UserNew, UserEdit } from './pages/UserForm'
 import { DraftList } from './pages/DraftList'
 import { DraftDetail } from './pages/DraftDetail'
 import { Toutiao } from './pages/Toutiao'
+import { Youtube } from './pages/Youtube'
+import { YoutubeDetail } from './pages/YoutubeDetail'
 import { Admin } from './pages/Admin'
 
 export function App() {
@@ -26,6 +28,8 @@ export function App() {
         <Route path="/:userId/toutiao/:draftId" element={<DraftDetail platform="toutiao" />} />
         <Route path="/:userId/douyin" element={<DraftList platform="douyin" />} />
         <Route path="/:userId/douyin/:draftId" element={<DraftDetail platform="douyin" />} />
+        <Route path="/:userId/youtube" element={<Youtube />} />
+        <Route path="/:userId/youtube/:draftId" element={<YoutubeDetail />} />
       </Route>
     </Routes>
   )

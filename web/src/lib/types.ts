@@ -8,9 +8,25 @@ export interface User {
   xhs_count: number
   toutiao_count: number
   douyin_count: number
+  youtube_count: number
 }
 
-export type Platform = 'wechat' | 'xhs' | 'toutiao' | 'douyin'
+export interface YoutubeDraft {
+  id: number
+  title: string
+  status: 'ready' | 'processing' | 'pushed' | 'failed'
+  created_at: string
+  pushed_at: string | null
+  error: string | null
+  source_url: string
+  video_url: string
+}
+
+export interface YoutubeDraftDetail extends YoutubeDraft {
+  content: string  // bilingual SRT
+}
+
+export type Platform = 'wechat' | 'xhs' | 'toutiao' | 'douyin' | 'youtube'
 
 export type DraftStatus = 'ready' | 'pushed' | 'failed'
 

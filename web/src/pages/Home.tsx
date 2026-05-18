@@ -45,11 +45,12 @@ export function Home() {
               <div className="text-lg font-bold mb-1">{u.name}</div>
               <div className="text-xs text-slate-400 font-mono mb-4">{u.id}</div>
 
-              <div className="grid grid-cols-4 gap-2 p-3 bg-slate-50 rounded-md mb-4">
+              <div className="grid grid-cols-5 gap-2 p-3 bg-slate-50 rounded-md mb-4">
                 <Stat label="📰 公众号" n={u.wechat_count} />
                 <Stat label="🌹 小红书" n={u.xhs_count} />
                 <Stat label="📱 头条号" n={u.toutiao_count} />
                 <Stat label="🎵 抖音"   n={u.douyin_count} />
+                <Stat label="📺 YouTube" n={u.youtube_count} />
               </div>
 
               <div className="flex gap-2">

@@ -1,5 +1,5 @@
 """
-YouTube → bilingual (zh+en) subtitles + QR code blur.
+YouTube → bilingual (zh+en) subtitles + hardsub strip + QR code blur.
 
 集成自 rangsit 项目（独立 CLI）→ publisher-hub library。
 入口：process_youtube(url, opts) 见文件末尾。CLI 入口 main() 已移除。
@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -26,11 +27,14 @@ BASE_URL = os.environ.get(
 )
 MODEL = os.environ.get("TRANSLATE_MODEL", "deepseek-v4-pro")
 
-# 此文件在 publisher_hub/youtube/pipeline.py
-# parents[0] = youtube/   parents[2] = publisher-hub/（项目根）
-PUBLISHER_HUB_ROOT = Path(__file__).resolve().parents[2]
-MODELS_DIR         = Path(__file__).resolve().parent / "models"
+# publisher-hub 集成版本的路径：
+#   parents[0] = publisher_hub/youtube/   （本模块）
+#   parents[2] = publisher-hub/           （项目根，存放 .venv / cookies.txt）
+PUBLISHER_HUB_ROOT  = Path(__file__).resolve().parents[2]
+MODELS_DIR          = Path(__file__).resolve().parent / "models"
 DEFAULT_OUTPUT_ROOT = PUBLISHER_HUB_ROOT / "data" / "youtube"
+# 为兼容上游 rangsit 同名变量，保留 PROJECT_ROOT 但指向 publisher-hub 根
+PROJECT_ROOT = PUBLISHER_HUB_ROOT
 
 QR_SCAN_INTERVAL_SEC = 0.2
 QR_BBOX_PAD_FACTOR = 1.6
@@ -41,6 +45,13 @@ QR_BLUR_SIGMA = 50
 TRANSLATE_BATCH_SIZE = 50
 TRANSLATE_CONTEXT_BEFORE = 4  # last N already-translated segments shown as prior context
 TRANSLATE_CONTEXT_AFTER = 4   # next N raw source segments shown as upcoming context
+
+# Sentence-group merging — 把 YouTube 滚动式自动字幕重新分段，按"一句话"成组
+SENTENCE_END_CHARS = ".!?。！？;；…"
+MAX_GROUP_DURATION_SEC = 20.0  # 单条字幕最长 20 秒（YouTube 自动字幕窗口本身就宽，给长枚举句留余地）
+MAX_GROUP_CHARS = 220          # 单组源文本超过这个字符数就强制断
+MAX_GROUP_GAP_SEC = 1.5        # 相邻片段间静默 > 1.5s 强制断
+MIN_GROUP_DURATION_SEC = 1.0   # 单条字幕最短 1 秒（避免闪一下就消失）
 
 # 替换原片里"扫描二维码 / 关注公众号 / 访问链接"这类 CTA 为大中华区办事处口径，
 # 因为中国发行版不出现二维码（详见 --blur-qr 默认关闭的逻辑）。
@@ -125,7 +136,7 @@ def download_video(url: str, out_dir: Path) -> Path:
 
     log(f"Downloading via yt-dlp: {url}")
     # Use the venv's yt-dlp so curl_cffi impersonation works
-    yt_dlp = str(PUBLISHER_HUB_ROOT / ".venv/bin/yt-dlp")
+    yt_dlp = str(PROJECT_ROOT / ".venv/bin/yt-dlp")
     if not Path(yt_dlp).exists():
         yt_dlp = find_bin("yt-dlp")
 
@@ -139,9 +150,9 @@ def download_video(url: str, out_dir: Path) -> Path:
         "--remote-components", "ejs:github",
         "-o", str(out_dir / "video.%(ext)s"),
     ]
-    # cookies：从环境变量 YT_DLP_COOKIES 或 publisher-hub 项目根 cookies.txt 取
+    # cookies：从环境变量 YT_DLP_COOKIES 或项目根目录 cookies.txt 取
     # VPS IP 会被 YouTube 识别为 bot，必须带登录 cookies 才能下载
-    cookies_path = os.environ.get("YT_DLP_COOKIES") or str(PUBLISHER_HUB_ROOT / "cookies.txt")
+    cookies_path = os.environ.get("YT_DLP_COOKIES") or str(PROJECT_ROOT / "cookies.txt")
     if Path(cookies_path).exists():
         cmd += ["--cookies", cookies_path]
         log(f"  using cookies: {cookies_path}")
@@ -267,7 +278,72 @@ def strip_hardsub_band(video_path: Path, out_dir: Path) -> Path:
     return target
 
 
-class _Snippet:
+class SentenceGroup:
+    """One linguistic-unit subtitle: spans multiple YouTube auto-caption snippets but
+    reads as one sentence/phrase. Shape-compatible with youtube_transcript_api snippets
+    (has .text / .start / .duration) so downstream translate/write code works unchanged.
+    """
+    __slots__ = ("text", "start", "duration")
+
+    def __init__(self, text: str, start: float, duration: float) -> None:
+        self.text = text
+        self.start = start
+        self.duration = duration
+
+
+def group_snippets_into_sentences(snippets) -> list[SentenceGroup]:
+    """Merge YouTube's rolling-window auto-caption snippets into proper sentence groups.
+
+    Heuristics for "cut here":
+      - prior text ends in a sentence terminator
+      - silence gap to next snippet > MAX_GROUP_GAP_SEC
+      - would-be group duration > MAX_GROUP_DURATION_SEC
+      - would-be group character count > MAX_GROUP_CHARS
+    """
+    groups: list[SentenceGroup] = []
+    cur_texts: list[str] = []
+    cur_start: float | None = None
+    cur_end: float = 0.0
+
+    def flush() -> None:
+        if cur_start is None or not cur_texts:
+            return
+        dur = max(cur_end - cur_start, MIN_GROUP_DURATION_SEC)
+        groups.append(SentenceGroup(" ".join(cur_texts).strip(), cur_start, dur))
+
+    for s in snippets:
+        s_text = clean_caption_noise(s.text)
+        if not s_text:
+            continue
+        s_start = float(s.start)
+        s_end = s_start + float(s.duration)
+
+        if cur_start is None:
+            cur_start, cur_end = s_start, s_end
+            cur_texts = [s_text]
+            continue
+
+        prev_text = cur_texts[-1]
+        ends_sentence = prev_text and prev_text[-1] in SENTENCE_END_CHARS
+        gap = max(0.0, s_start - cur_end)
+        would_dur = max(s_end, cur_end) - cur_start
+        would_chars = sum(len(t) for t in cur_texts) + 1 + len(s_text)
+
+        if ends_sentence or gap > MAX_GROUP_GAP_SEC \
+                or would_dur > MAX_GROUP_DURATION_SEC \
+                or would_chars > MAX_GROUP_CHARS:
+            flush()
+            cur_start, cur_end = s_start, s_end
+            cur_texts = [s_text]
+        else:
+            cur_texts.append(s_text)
+            cur_end = max(cur_end, s_end)
+
+    flush()
+    return groups
+
+
+class _VttSnippet:
     """模拟 youtube-transcript-api 的 FetchedTranscriptSnippet 接口（text/start/duration）。"""
     __slots__ = ('text', 'start', 'duration')
 
@@ -282,14 +358,10 @@ _VTT_TS_RE = re.compile(
 )
 
 
-def _parse_vtt(vtt_text: str) -> list[_Snippet]:
-    """简易 VTT 解析。返回去重后的 snippets。
-
-    YouTube 自动字幕的 VTT 常含每行重复的"前缀文本"（用来做滚动效果），
-    需要按时间戳去重，只保留每个 cue 的新增内容。
-    """
-    out: list[_Snippet] = []
-    seen_text: set[tuple[int, str]] = set()  # (round(t0*10), text) 防极近重复
+def _parse_vtt(vtt_text: str) -> list[_VttSnippet]:
+    """简易 VTT 解析。返回去重后的 snippets，shape 兼容 youtube-transcript-api。"""
+    out: list[_VttSnippet] = []
+    seen_text: set[tuple[int, str]] = set()
     for blk in re.split(r'\n\s*\n', vtt_text):
         lines = [ln for ln in blk.splitlines() if ln.strip()]
         if not lines:
@@ -303,11 +375,8 @@ def _parse_vtt(vtt_text: str) -> list[_Snippet]:
         h1, m1, s1, ms1, h2, m2, s2, ms2 = (int(x) for x in m.groups())
         t0 = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000
         t1 = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000
-        # text = 时间戳行之后所有行
-        text_lines = lines[ts_idx + 1:]
-        text = '\n'.join(text_lines)
-        # 去 VTT 内嵌标签 <c>, <00:00:01.000> 等
-        text = re.sub(r'<[^>]+>', '', text)
+        text = '\n'.join(lines[ts_idx + 1:])
+        text = re.sub(r'<[^>]+>', '', text)             # 去 <c>, <00:00:01.000> 等内嵌标签
         text = re.sub(r'\s+', ' ', text).strip()
         if not text:
             continue
@@ -315,27 +384,23 @@ def _parse_vtt(vtt_text: str) -> list[_Snippet]:
         if key in seen_text:
             continue
         seen_text.add(key)
-        out.append(_Snippet(text=text, start=t0, duration=max(0.1, t1 - t0)))
+        out.append(_VttSnippet(text=text, start=t0, duration=max(0.1, t1 - t0)))
     return out
 
 
 def fetch_transcript(video_id: str):
     """用 yt-dlp 拉字幕并解析 VTT。
 
-    旧方案 youtube-transcript-api 在 VPS IP 段被 YouTube 直接 ban（cookies 救不了，
-    因为它走的是 innertube endpoint，YouTube 对 cloud IP 段单独黑名单）。
-    yt-dlp 走 player API + EJS 解 JS 挑战 + cookies 能正常拿到字幕。
+    publisher-hub 跑在 VPS：youtube-transcript-api 的 innertube endpoint
+    会被 YouTube 对 cloud IP 段单独 ban（cookies 救不了）。yt-dlp 走
+    player API + EJS + cookies 能正常拿字幕。
     """
-    import tempfile
-
     log(f"Fetching transcript for {video_id}")
     url = f"https://www.youtube.com/watch?v={video_id}"
     yt_dlp = str(PUBLISHER_HUB_ROOT / ".venv/bin/yt-dlp")
     if not Path(yt_dlp).exists():
         yt_dlp = find_bin("yt-dlp")
     cookies_path = os.environ.get("YT_DLP_COOKIES") or str(PUBLISHER_HUB_ROOT / "cookies.txt")
-
-    # 优先级：英文人工字幕 > 中文人工字幕 > 任意人工字幕 > 英文自动字幕 > 任意自动字幕
     sub_langs = "en,en-US,en-GB,zh,zh-Hans,zh-CN,zh-Hant,zh-TW"
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -359,10 +424,8 @@ def fetch_transcript(video_id: str):
         if not vtts:
             raise RuntimeError("yt-dlp 没生成字幕文件，可能视频本身没字幕")
 
-        # 优先非自动字幕（文件名通常没 .auto.）
         manual = [p for p in vtts if '.auto.' not in p.name]
         chosen = (manual or vtts)[0]
-        # 文件名形如 vid.en.vtt 或 vid.en.auto.vtt → 第二段是 lang
         parts = chosen.stem.split('.')
         lang_code = parts[1] if len(parts) > 1 else 'unknown'
         is_auto = ('.auto.' in chosen.name) or (chosen not in manual)
@@ -421,11 +484,10 @@ def _llm_translate_batch(
         f"Rules:\n"
         f"- Return EXACTLY {len(snippets)} items in the original order.\n"
         f"- Do not merge, split, or skip segments — one input segment maps to one output item.\n"
-        f"- Subtitles are often FRAGMENTS of longer sentences. When a segment is a partial "
-        f"clause, look at the PRIOR + UPCOMING context to infer the full sentence, then "
-        f"translate the fragment so it reads natural alongside its neighbors (matching "
-        f"tense, subject, conjunctions). Keep the fragment a fragment — do not pad it into "
-        f"a complete sentence.\n"
+        f"- Each input segment has been pre-grouped into a complete (or near-complete) "
+        f"spoken phrase or sentence. Translate it as a self-contained line that fits its "
+        f"time window. Do NOT split or merge content across segments — one input segment "
+        f"yields one output item.\n"
         f"- Preserve segment boundaries; the timing of each subtitle line is fixed.\n"
         f"- Use natural, conversational tone consistent with prior context.\n"
         f"- Keep terminology consistent with the prior translations shown in context "
@@ -613,10 +675,42 @@ def get_video_dims(video_path: Path) -> tuple[int, int]:
     return int(s["width"]), int(s["height"])
 
 
-def build_filter_chain(width: int, height: int, qr_windows: list[tuple]) -> str | None:
-    if not qr_windows:
-        return None
+# 硬烧字幕样式（ffmpeg `subtitles=...:force_style=...` 用的 ASS override）
+# 关键：白字 + 黑色描边 + 底部居中 + 字体大小适中；中文要求字体存在
+_HARDSUB_STYLE = (
+    "Fontname=Noto Sans CJK SC,"
+    "Fontsize=22,"
+    "PrimaryColour=&H00FFFFFF,"      # 白字（&H AABBGGRR）
+    "OutlineColour=&H80000000,"      # 半透明黑描边
+    "BorderStyle=1,"                 # 1=描边 + 阴影
+    "Outline=2,"
+    "Shadow=0,"
+    "Alignment=2,"                   # 底部居中
+    "MarginV=40"
+)
 
+
+def _escape_for_ffmpeg_filter(p: Path) -> str:
+    """subtitles= 内的路径需要转义冒号、引号、反斜杠。"""
+    s = str(p)
+    s = s.replace('\\', '\\\\')
+    s = s.replace(':', r'\:')
+    s = s.replace("'", r"\'")
+    return s
+
+
+def build_filter_chain(
+    width: int, height: int, qr_windows: list[tuple], bilingual_srt: Path,
+) -> str:
+    """构建 ffmpeg filter chain：QR blur（可选）+ 硬烧双语字幕（必须）。"""
+    bi_escaped = _escape_for_ffmpeg_filter(bilingual_srt)
+    subs_filter = f"subtitles='{bi_escaped}':force_style='{_HARDSUB_STYLE}'"
+
+    if not qr_windows:
+        # 没有 QR → 单条 subtitles filter
+        return f"[0:v]{subs_filter}[vout]"
+
+    # 有 QR：先 split → 复制原帧 + crop+blur 区域 → overlay 回 → subtitles
     n = len(qr_windows)
     parts = []
     parts.append(
@@ -638,12 +732,15 @@ def build_filter_chain(width: int, height: int, qr_windows: list[tuple]) -> str 
 
     prev = "base"
     for i, (t0, t1, (x, y, _w, _h)) in enumerate(clamped):
-        out = "vout" if i == n - 1 else f"v{i}"
+        out = "vqr" if i == n - 1 else f"v{i}"
         parts.append(
             f"[{prev}][b{i}]overlay={x}:{y}"
             f":enable='between(t,{t0:.3f},{t1:.3f})'[{out}]"
         )
         prev = out
+
+    # 最后一道 overlay 出 [vqr]，再走 subtitles → [vout]
+    parts.append(f"[vqr]{subs_filter}[vout]")
 
     return ";".join(parts)
 
@@ -654,31 +751,29 @@ def render_final(
     sub_files: tuple[Path, Path, Path],
     out_dir: Path,
 ) -> Path:
+    """硬烧双语字幕（subtitles=...），无论 QR 是否处理都重编码视频流。
+
+    硬烧的代价：必须 libx264 重编码（无法 -c:v copy）。30s 视频 < 30s 完成。
+    收益：浏览器 <video> / 微信播放器等到处都能看到字幕，不依赖软轨支持。
+
+    同时仍软挂三轨字幕（mov_text），支持的播放器可以切换轨道；
+    硬烧的是双语，软轨包括 双语/英文/中文 三套。
+    """
     en_srt, zh_srt, bi_srt = sub_files
     final = out_dir / "video_final.mp4"
     log(f"Rendering final → {final.name}")
 
     ffmpeg = find_bin("ffmpeg")
     w, h = get_video_dims(video_path)
-    fchain = build_filter_chain(w, h, qr_windows)
+    fchain = build_filter_chain(w, h, qr_windows, bi_srt)
 
     cmd = [
         ffmpeg, "-y", "-i", str(video_path),
         "-i", str(bi_srt), "-i", str(en_srt), "-i", str(zh_srt),
-    ]
-
-    if fchain:
-        cmd += ["-filter_complex", fchain, "-map", "[vout]", "-map", "0:a"]
-    else:
-        cmd += ["-map", "0:v", "-map", "0:a"]
-
-    cmd += [
+        "-filter_complex", fchain,
+        "-map", "[vout]", "-map", "0:a",
         "-map", "1", "-map", "2", "-map", "3",
-        "-c:v", "libx264" if fchain else "copy",
-    ]
-    if fchain:
-        cmd += ["-preset", "fast", "-crf", "20"]
-    cmd += [
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "copy", "-c:s", "mov_text",
         "-metadata:s:s:0", "language=chi",
         "-metadata:s:s:0", "title=中英双语",
@@ -692,8 +787,6 @@ def render_final(
     subprocess.run(cmd, check=True)
     return final
 
-
-# --- Main -------------------------------------------------------------------
 
 # --- Library entry point ----------------------------------------------------
 
@@ -723,8 +816,10 @@ def process_youtube(
     raw_video = download_video(url, out_dir)
     video = strip_hardsub_band(raw_video, out_dir) if strip_hardsub else raw_video
     snippets, src_code, src_name = fetch_transcript(video_id)
-    translations = translate_all(snippets, src_name)
-    sub_files = write_srts(snippets, translations, out_dir)
+    groups = group_snippets_into_sentences(snippets)
+    log(f"Merged {len(snippets)} caption snippets into {len(groups)} sentence groups")
+    translations = translate_all(groups, src_name)
+    sub_files = write_srts(groups, translations, out_dir)
 
     if blur_qr:
         qr_windows = detect_qr_windows(video)
@@ -748,6 +843,7 @@ def process_youtube(
         "video_id": video_id,
         "source_language": f"{src_code} ({src_name})",
         "segments": len(snippets),
+        "sentence_groups": len(groups),
         "qr_codes": [
             {"t_start": w[0], "t_end": w[1], "bbox": w[2], "content": w[3]}
             for w in qr_windows

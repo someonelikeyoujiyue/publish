@@ -5,7 +5,8 @@ import { api, authApi } from '@/lib/api'
 import { getRole, clearSession } from '@/lib/auth'
 import type { Platform } from '@/lib/types'
 
-const ALL_PLATFORMS: Platform[] = ['wechat', 'xhs', 'toutiao', 'douyin']
+// listDrafts 通用 API 适用的 platform（youtube 走单独的 ytList，不在这里 prefetch）
+const PREFETCH_PLATFORMS: Platform[] = ['wechat', 'xhs', 'toutiao', 'douyin']
 
 export function Layout() {
   const { userId } = useParams()
@@ -28,13 +29,19 @@ export function Layout() {
   // 切 tab 时已经命中缓存，瞬间显示（跨区 SQL ~500ms 提前付掉）
   useEffect(() => {
     if (!userId) return
-    for (const p of ALL_PLATFORMS) {
+    for (const p of PREFETCH_PLATFORMS) {
       qc.prefetchQuery({
         queryKey: ['drafts', userId, p],
         queryFn:  () => api.listDrafts(userId, p),
         staleTime: 60_000,
       })
     }
+    // youtube 走单独 API
+    qc.prefetchQuery({
+      queryKey: ['drafts', userId, 'youtube'],
+      queryFn:  () => api.ytList(userId),
+      staleTime: 60_000,
+    })
   }, [userId, qc])
 
   return (
@@ -73,6 +80,7 @@ export function Layout() {
             <TabLink to={`/${currentUser.id}/xhs`}     active={pathname.startsWith(`/${currentUser.id}/xhs`)}>🌹 小红书<Pill>{currentUser.xhs_count}</Pill></TabLink>
             <TabLink to={`/${currentUser.id}/toutiao`} active={pathname.startsWith(`/${currentUser.id}/toutiao`)}>📱 今日头条<Pill>{currentUser.toutiao_count}</Pill></TabLink>
             <TabLink to={`/${currentUser.id}/douyin`}  active={pathname.startsWith(`/${currentUser.id}/douyin`)}>🎵 抖音<Pill>{currentUser.douyin_count}</Pill></TabLink>
+            <TabLink to={`/${currentUser.id}/youtube`} active={pathname.startsWith(`/${currentUser.id}/youtube`)}>📺 YouTube<Pill>{currentUser.youtube_count}</Pill></TabLink>
           </div>
         </div>
       )}

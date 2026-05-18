@@ -5,7 +5,7 @@
 """
 from fastapi import APIRouter
 
-from . import auth, users, wechat, xhs, toutiao, toutiao_drafts, douyin_drafts, admin
+from . import auth, users, wechat, xhs, toutiao, toutiao_drafts, douyin_drafts, youtube, admin
 
 api_router = APIRouter(prefix='/api')
 api_router.include_router(auth.router,           tags=['auth'])
@@ -15,4 +15,5 @@ api_router.include_router(xhs.router,            tags=['xhs'])
 api_router.include_router(toutiao.router,        tags=['toutiao'])
 api_router.include_router(toutiao_drafts.router, tags=['toutiao-drafts'])
 api_router.include_router(douyin_drafts.router,  tags=['douyin-drafts'])
+api_router.include_router(youtube.router,        tags=['youtube'])
 api_router.include_router(admin.router,          tags=['admin'])

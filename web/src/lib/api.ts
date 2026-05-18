@@ -1,5 +1,6 @@
 import type {
   User, Platform, DraftSummary, DraftDetail, ToutiaoStatus, BindResult,
+  YoutubeDraft, YoutubeDraftDetail,
 } from './types'
 import { getToken, clearSession } from './auth'
 
@@ -73,6 +74,17 @@ export const api = {
     req<BindResult>(`/users/${userId}/toutiao/bind`, { method: 'POST', body: '{}' }),
   toutiaoUnbind: (userId: string) =>
     req<{ ok: boolean }>(`/users/${userId}/toutiao/unbind`, { method: 'POST', body: '{}' }),
+
+  // youtube
+  ytList: (userId: string) =>
+    req<{ drafts: YoutubeDraft[] }>(`/users/${userId}/youtube/drafts`),
+  ytGet:  (userId: string, id: number) =>
+    req<YoutubeDraftDetail>(`/users/${userId}/youtube/drafts/${id}`),
+  ytSubmit: (userId: string, body: { url: string; strip_hardsub: boolean; blur_qr: boolean }) =>
+    req<{ ok: boolean; draft_id: number; status: string }>(
+      `/users/${userId}/youtube/submit`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 
   // admin
   runNow: (userId?: string) =>

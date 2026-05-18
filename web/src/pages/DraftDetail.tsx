@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
 
-const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条', douyin: '抖音图文' } as const
+const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条', douyin: '抖音图文', youtube: 'YouTube' } as const
 
 // 各平台发布页（手动模式跳转用）
 const PUBLISH_URL: Partial<Record<Platform, string>> = {
