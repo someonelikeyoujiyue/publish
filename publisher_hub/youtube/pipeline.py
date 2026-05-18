@@ -267,35 +267,114 @@ def strip_hardsub_band(video_path: Path, out_dir: Path) -> Path:
     return target
 
 
+class _Snippet:
+    """模拟 youtube-transcript-api 的 FetchedTranscriptSnippet 接口（text/start/duration）。"""
+    __slots__ = ('text', 'start', 'duration')
+
+    def __init__(self, text: str, start: float, duration: float):
+        self.text = text
+        self.start = start
+        self.duration = duration
+
+
+_VTT_TS_RE = re.compile(
+    r'(\d+):(\d+):(\d+)\.(\d+)\s*-->\s*(\d+):(\d+):(\d+)\.(\d+)'
+)
+
+
+def _parse_vtt(vtt_text: str) -> list[_Snippet]:
+    """简易 VTT 解析。返回去重后的 snippets。
+
+    YouTube 自动字幕的 VTT 常含每行重复的"前缀文本"（用来做滚动效果），
+    需要按时间戳去重，只保留每个 cue 的新增内容。
+    """
+    out: list[_Snippet] = []
+    seen_text: set[tuple[int, str]] = set()  # (round(t0*10), text) 防极近重复
+    for blk in re.split(r'\n\s*\n', vtt_text):
+        lines = [ln for ln in blk.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        ts_idx = next((i for i, ln in enumerate(lines) if '-->' in ln), -1)
+        if ts_idx < 0:
+            continue
+        m = _VTT_TS_RE.search(lines[ts_idx])
+        if not m:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = (int(x) for x in m.groups())
+        t0 = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000
+        t1 = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000
+        # text = 时间戳行之后所有行
+        text_lines = lines[ts_idx + 1:]
+        text = '\n'.join(text_lines)
+        # 去 VTT 内嵌标签 <c>, <00:00:01.000> 等
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        if not text:
+            continue
+        key = (int(t0 * 10), text)
+        if key in seen_text:
+            continue
+        seen_text.add(key)
+        out.append(_Snippet(text=text, start=t0, duration=max(0.1, t1 - t0)))
+    return out
+
+
 def fetch_transcript(video_id: str):
-    from youtube_transcript_api import YouTubeTranscriptApi
-    from http.cookiejar import MozillaCookieJar
-    import requests
+    """用 yt-dlp 拉字幕并解析 VTT。
+
+    旧方案 youtube-transcript-api 在 VPS IP 段被 YouTube 直接 ban（cookies 救不了，
+    因为它走的是 innertube endpoint，YouTube 对 cloud IP 段单独黑名单）。
+    yt-dlp 走 player API + EJS 解 JS 挑战 + cookies 能正常拿到字幕。
+    """
+    import tempfile
 
     log(f"Fetching transcript for {video_id}")
-    # VPS IP 被 YouTube ban，必须给 transcript api 带 cookies 才能拿到字幕
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    yt_dlp = str(PUBLISHER_HUB_ROOT / ".venv/bin/yt-dlp")
+    if not Path(yt_dlp).exists():
+        yt_dlp = find_bin("yt-dlp")
     cookies_path = os.environ.get("YT_DLP_COOKIES") or str(PUBLISHER_HUB_ROOT / "cookies.txt")
-    if Path(cookies_path).exists():
-        jar = MozillaCookieJar(cookies_path)
-        jar.load(ignore_discard=True, ignore_expires=True)
-        session = requests.Session()
-        session.cookies = jar
-        log(f"  transcript api using cookies: {cookies_path}")
-        api = YouTubeTranscriptApi(http_client=session)
-    else:
-        api = YouTubeTranscriptApi()
 
-    transcripts = list(api.list(video_id))
-    if not transcripts:
-        raise RuntimeError("No transcripts available for this video")
-    manual = [t for t in transcripts if not t.is_generated]
-    chosen = manual[0] if manual else transcripts[0]
-    log(
-        f"  source: {chosen.language_code} ({chosen.language}) "
-        f"{'manual' if not chosen.is_generated else 'auto-generated'}"
-    )
-    data = api.fetch(video_id, languages=[chosen.language_code])
-    return data.snippets, chosen.language_code, chosen.language
+    # 优先级：英文人工字幕 > 中文人工字幕 > 任意人工字幕 > 英文自动字幕 > 任意自动字幕
+    sub_langs = "en,en-US,en-GB,zh,zh-Hans,zh-CN,zh-Hant,zh-TW"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = [
+            yt_dlp,
+            "--write-subs", "--write-auto-subs",
+            "--sub-langs", sub_langs,
+            "--sub-format", "vtt",
+            "--skip-download",
+            "--no-warnings",
+            "--impersonate", "Chrome",
+            "--remote-components", "ejs:github",
+            "-o", str(Path(tmpdir) / "vid.%(ext)s"),
+        ]
+        if Path(cookies_path).exists():
+            cmd += ["--cookies", cookies_path]
+        cmd.append(url)
+        subprocess.run(cmd, check=True)
+
+        vtts = list(Path(tmpdir).glob("vid.*.vtt"))
+        if not vtts:
+            raise RuntimeError("yt-dlp 没生成字幕文件，可能视频本身没字幕")
+
+        # 优先非自动字幕（文件名通常没 .auto.）
+        manual = [p for p in vtts if '.auto.' not in p.name]
+        chosen = (manual or vtts)[0]
+        # 文件名形如 vid.en.vtt 或 vid.en.auto.vtt → 第二段是 lang
+        parts = chosen.stem.split('.')
+        lang_code = parts[1] if len(parts) > 1 else 'unknown'
+        is_auto = ('.auto.' in chosen.name) or (chosen not in manual)
+        log(f"  source: {lang_code} {'auto-generated' if is_auto else 'manual'} ({chosen.name})")
+
+        vtt_text = chosen.read_text(encoding='utf-8', errors='replace')
+        snippets = _parse_vtt(vtt_text)
+
+    if not snippets:
+        raise RuntimeError(f"VTT 解析后没拿到任何字幕段，文件：{chosen.name}")
+    log(f"  parsed {len(snippets)} segments")
+    return snippets, lang_code, lang_code
 
 
 def _llm_translate_batch(
