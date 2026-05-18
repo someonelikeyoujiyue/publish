@@ -269,9 +269,22 @@ def strip_hardsub_band(video_path: Path, out_dir: Path) -> Path:
 
 def fetch_transcript(video_id: str):
     from youtube_transcript_api import YouTubeTranscriptApi
+    from http.cookiejar import MozillaCookieJar
+    import requests
 
     log(f"Fetching transcript for {video_id}")
-    api = YouTubeTranscriptApi()
+    # VPS IP 被 YouTube ban，必须给 transcript api 带 cookies 才能拿到字幕
+    cookies_path = os.environ.get("YT_DLP_COOKIES") or str(PUBLISHER_HUB_ROOT / "cookies.txt")
+    if Path(cookies_path).exists():
+        jar = MozillaCookieJar(cookies_path)
+        jar.load(ignore_discard=True, ignore_expires=True)
+        session = requests.Session()
+        session.cookies = jar
+        log(f"  transcript api using cookies: {cookies_path}")
+        api = YouTubeTranscriptApi(http_client=session)
+    else:
+        api = YouTubeTranscriptApi()
+
     transcripts = list(api.list(video_id))
     if not transcripts:
         raise RuntimeError("No transcripts available for this video")
