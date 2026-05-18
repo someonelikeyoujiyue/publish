@@ -86,6 +86,44 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     ),
 
+  ytUpload: async (
+    userId: string,
+    form: {
+      video: File
+      bilingual_srt?: File | null
+      en_srt?: File | null
+      zh_srt?: File | null
+      source_url?: string
+      title?: string
+    },
+  ): Promise<{ ok: boolean; draft_id: number; video_url: string; slug: string }> => {
+    const fd = new FormData()
+    fd.append('video', form.video)
+    if (form.bilingual_srt) fd.append('bilingual_srt', form.bilingual_srt)
+    if (form.en_srt)        fd.append('en_srt',        form.en_srt)
+    if (form.zh_srt)        fd.append('zh_srt',        form.zh_srt)
+    fd.append('source_url', form.source_url ?? '')
+    fd.append('title',      form.title      ?? '')
+    const headers: Record<string, string> = {}
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    // 注意：FormData 时不能设 Content-Type，浏览器会自动加 multipart boundary
+    const res = await fetch(`${BASE}/users/${userId}/youtube/upload`, {
+      method: 'POST', headers, body: fd,
+    })
+    if (res.status === 401) {
+      clearSession()
+      if (!location.pathname.startsWith('/login')) location.href = '/login?reason=expired'
+    }
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try { msg = JSON.parse(text).detail || text } catch { /* not json */ }
+      throw new Error(`HTTP ${res.status}: ${msg}`)
+    }
+    return res.json()
+  },
+
   // admin
   runNow: (userId?: string) =>
     req<{ ok: boolean; target: string | null }>(

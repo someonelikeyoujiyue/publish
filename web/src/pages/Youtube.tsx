@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -16,27 +16,43 @@ export function Youtube() {
   const { userId = '' } = useParams()
   const qc = useQueryClient()
   const admin = isAdmin()
+  const videoRef         = useRef<HTMLInputElement>(null)
+  const biRef            = useRef<HTMLInputElement>(null)
+  const enRef            = useRef<HTMLInputElement>(null)
+  const zhRef            = useRef<HTMLInputElement>(null)
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [title, setTitle]         = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['drafts', userId, 'youtube'],
     queryFn: () => api.ytList(userId),
-    // 有 processing 任务时加速轮询
     refetchInterval: (q) => {
       const drafts = (q.state.data as { drafts: { status: string }[] } | undefined)?.drafts
       return drafts?.some((d) => d.status === 'processing') ? 5_000 : false
     },
   })
 
-  const [form, setForm] = useState({
-    url: '',
-    strip_hardsub: true,
-    blur_qr: false,
-  })
-
-  const submit = useMutation({
-    mutationFn: () => api.ytSubmit(userId, form),
+  const upload = useMutation({
+    mutationFn: () => {
+      const video = videoRef.current?.files?.[0]
+      if (!video) throw new Error('请选择 mp4 视频文件')
+      return api.ytUpload(userId, {
+        video,
+        bilingual_srt: biRef.current?.files?.[0] || null,
+        en_srt:        enRef.current?.files?.[0] || null,
+        zh_srt:        zhRef.current?.files?.[0] || null,
+        source_url:    sourceUrl.trim(),
+        title:         title.trim(),
+      })
+    },
     onSuccess: () => {
-      setForm({ ...form, url: '' })
+      // 清空表单
+      if (videoRef.current) videoRef.current.value = ''
+      if (biRef.current) biRef.current.value = ''
+      if (enRef.current) enRef.current.value = ''
+      if (zhRef.current) zhRef.current.value = ''
+      setSourceUrl('')
+      setTitle('')
       qc.invalidateQueries({ queryKey: ['drafts', userId, 'youtube'] })
     },
   })
@@ -49,78 +65,87 @@ export function Youtube() {
 
   return (
     <>
-      {/* 提交表单（仅 admin） */}
+      {/* 上传表单（admin only） */}
       {admin && (
         <div className="bg-white border border-slate-200 rounded-lg p-5 mb-5">
-          <h2 className="text-lg font-semibold mb-3">📺 新建 YouTube 处理任务</h2>
+          <h2 className="text-lg font-semibold mb-1">📤 上传本地处理好的视频</h2>
           <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-            提交后服务器自动 yt-dlp 下载 1080p 视频 → 抓字幕 → LLM 翻译双语 →
-            ffmpeg 合成软挂三轨字幕的 mp4。<b>耗时 5-15 分钟</b>，完成后下方列表自动刷新。
+            在你本地用 rangsit 跑完后，把 <code className="bg-slate-100 px-1 rounded">video_final.mp4</code>
+            （必传）和 3 个 srt（可选）上传到服务器，<b>立即入库</b>，
+            前端运营人员可预览/下载。
           </p>
           <form
             onSubmit={(e) => {
               e.preventDefault()
-              if (form.url.trim()) submit.mutate()
+              upload.mutate()
             }}
             className="space-y-3"
           >
             <div>
-              <label className="block text-sm text-slate-700 mb-1">YouTube 链接</label>
+              <label className="block text-sm text-slate-700 mb-1">
+                视频文件 <span className="text-red-500">*</span>
+                <span className="text-xs text-slate-400 ml-2">（mp4，含硬烧字幕）</span>
+              </label>
+              <input ref={videoRef} type="file" accept="video/mp4" required className={inputCls} />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">双语 SRT</label>
+                <input ref={biRef} type="file" accept=".srt" className={inputCls + ' !text-xs'} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">英文 SRT</label>
+                <input ref={enRef} type="file" accept=".srt" className={inputCls + ' !text-xs'} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">中文 SRT</label>
+                <input ref={zhRef} type="file" accept=".srt" className={inputCls + ' !text-xs'} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-700 mb-1">
+                YouTube 链接 <span className="text-xs text-slate-400">（可选；用于提取 video_id 作为存储路径）</span>
+              </label>
               <input
-                value={form.url}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
-                className={inputCls + ' font-mono'}
+                value={sourceUrl}
+                onChange={(e) => setSourceUrl(e.target.value)}
                 placeholder="https://www.youtube.com/watch?v=..."
-                required
-                pattern=".*(youtube\.com|youtu\.be).*"
+                className={inputCls + ' font-mono text-xs'}
               />
             </div>
-            <div className="flex gap-4 flex-wrap">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={form.strip_hardsub}
-                  onChange={(e) => setForm({ ...form, strip_hardsub: e.target.checked })}
-                  className="accent-brand-600"
-                />
-                自动去除原片底部硬字幕（智能检测）
+            <div>
+              <label className="block text-sm text-slate-700 mb-1">
+                标题 <span className="text-xs text-slate-400">（可选，留空用 video_id）</span>
               </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={form.blur_qr}
-                  onChange={(e) => setForm({ ...form, blur_qr: e.target.checked })}
-                  className="accent-brand-600"
-                />
-                模糊视频中的二维码
-              </label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className={inputCls}
+              />
             </div>
-            {submit.error && <Flash tone="error">{(submit.error as Error).message}</Flash>}
-            {submit.data?.ok && (
+            {upload.error && <Flash tone="error">{(upload.error as Error).message}</Flash>}
+            {upload.data?.ok && (
               <Flash tone="success">
-                ✓ 已提交（draft_id={submit.data.draft_id}），下方列表显示 ⏳ 处理中
+                ✓ 已上传（draft_id={upload.data.draft_id}），可在下方查看
               </Flash>
             )}
-            <Btn type="submit" loading={submit.isPending}>
-              🚀 提交处理
+            <Btn type="submit" loading={upload.isPending}>
+              📤 上传到服务器
             </Btn>
           </form>
         </div>
       )}
 
-      {/* 历史任务列表 */}
+      {/* 列表 */}
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-lg font-semibold">
-          历史任务
+          历史视频
           <span className="ml-2 text-[13px] text-slate-400 font-normal">{drafts.length} 条</span>
         </h2>
       </div>
 
       {drafts.length === 0 ? (
-        <Empty
-          icon="📺"
-          title={admin ? '还没有 YouTube 处理任务' : '管理员还没提交过 YouTube 处理任务'}
-        />
+        <Empty icon="📺" title="还没有视频" />
       ) : (
         <div className="space-y-3">
           {drafts.map((d) => {
@@ -140,9 +165,11 @@ export function Youtube() {
                 >
                   {d.title || '(无标题)'}
                 </Link>
-                <div className="text-[11px] text-slate-500 font-mono truncate mb-2">
-                  {d.source_url}
-                </div>
+                {d.source_url && (
+                  <div className="text-[11px] text-slate-500 font-mono truncate mb-2">
+                    {d.source_url}
+                  </div>
+                )}
                 {d.status === 'failed' && d.error && (
                   <div className="text-xs text-red-700 bg-red-50 px-2 py-1 rounded">
                     {d.error.slice(0, 120)}
