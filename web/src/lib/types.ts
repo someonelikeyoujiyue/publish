@@ -1,9 +1,11 @@
 export interface User {
   id: string
   name: string
-  wechat: { app_id?: string; proxy?: string; author?: string }
+  wechat: { app_id?: string; proxy?: string; author?: string; bound?: boolean }
   xhs: { display_name?: string }
   toutiao: { cdp_port?: number }
+  /** 启用每日仿写的平台子集；缺省 = 全开 */
+  enabled_platforms?: ('wechat' | 'xhs' | 'toutiao' | 'douyin')[]
   wechat_count: number
   xhs_count: number
   toutiao_count: number

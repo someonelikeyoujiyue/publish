@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'user'
+export type Role = 'admin' | 'editor' | 'user'
 
 const KEY = 'publisher-hub-auth'
 
@@ -37,6 +37,12 @@ export function getRole(): Role | null {
 
 export function isAdmin(): boolean {
   return getRole() === 'admin'
+}
+
+/** 能否仿写 / 推送等"写"动作：admin 或 editor。user 只读不行。 */
+export function canWrite(): boolean {
+  const r = getRole()
+  return r === 'admin' || r === 'editor'
 }
 
 export function isLoggedIn(): boolean {

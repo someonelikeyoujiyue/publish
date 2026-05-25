@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { isAdmin } from '@/lib/auth'
+import { canWrite } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
 import type { Platform, DraftStatus } from '@/lib/types'
 
@@ -16,7 +16,8 @@ const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头
 export function DraftList({ platform }: { platform: Platform }) {
   const { userId = '' } = useParams()
   const qc = useQueryClient()
-  const admin = isAdmin()
+  // 仿写按钮对 admin + editor 都可见；user 只读
+  const canRewrite = canWrite()
 
   const { data, isLoading } = useQuery({
     queryKey: ['drafts', userId, platform],
@@ -42,7 +43,7 @@ export function DraftList({ platform }: { platform: Platform }) {
           {PLATFORM_LABEL[platform]} 草稿
           <span className="ml-2 text-[13px] text-slate-400 font-normal">{drafts.length} 条</span>
         </h2>
-        {admin && (
+        {canRewrite && (
           <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>
             {refresh.isPending ? '仿写中…（30-90s）' : '⟳ 立即仿写'}
           </Btn>
@@ -54,8 +55,8 @@ export function DraftList({ platform }: { platform: Platform }) {
 
       {drafts.length === 0 ? (
         <Empty icon="✍️" title={`还没有 ${PLATFORM_LABEL[platform]} 草稿`} action={
-          admin ? <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>立即仿写</Btn>
-                : <p className="text-xs text-slate-400">等管理员仿写或定时任务</p>
+          canRewrite ? <Btn onClick={() => refresh.mutate()} loading={refresh.isPending}>立即仿写</Btn>
+                     : <p className="text-xs text-slate-400">等定时任务或有权限的账号仿写</p>
         } />
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">

@@ -5,29 +5,47 @@ import { api } from '@/lib/api'
 import { isAdmin } from '@/lib/auth'
 import { Btn, Flash } from '@/components/ui'
 
+type PlatformKey = 'wechat' | 'xhs' | 'toutiao' | 'douyin'
+const PLATFORMS: { key: PlatformKey; label: string; hint: string }[] = [
+  { key: 'wechat',  label: '公众号',   hint: '官方 API 推草稿箱（需绑 AppID/Secret）' },
+  { key: 'xhs',     label: '小红书',   hint: 'myaibot 生二维码扫码确认' },
+  { key: 'toutiao', label: '头条号',   hint: 'CDP DOM 自动填表（需扫码绑定）' },
+  { key: 'douyin',  label: '抖音图文', hint: '用户复制 + 跳 creator.douyin.com 自己粘贴' },
+]
+const ALL_KEYS: PlatformKey[] = PLATFORMS.map(p => p.key)
+
 function Form({ mode, defaultValues }: {
   mode: 'new' | 'edit'
-  defaultValues: { id: string; name: string; wechat_app_id: string }
+  defaultValues: { id: string; name: string; enabled_platforms: PlatformKey[] }
 }) {
   const nav = useNavigate()
   const qc = useQueryClient()
   const [form, setForm] = useState({
-    id: defaultValues.id, name: defaultValues.name,
-    wechat_app_id: defaultValues.wechat_app_id, wechat_app_secret: '',
+    id: defaultValues.id,
+    name: defaultValues.name,
+    enabled_platforms: defaultValues.enabled_platforms,
   })
+
+  const togglePlatform = (k: PlatformKey) => {
+    setForm(f => ({
+      ...f,
+      enabled_platforms: f.enabled_platforms.includes(k)
+        ? f.enabled_platforms.filter(x => x !== k)
+        : [...f.enabled_platforms, k],
+    }))
+  }
 
   const m = useMutation({
     mutationFn: async () => {
       if (mode === 'new') {
         return api.createUser({
           id: form.id, name: form.name,
-          wechat_app_id: form.wechat_app_id, wechat_app_secret: form.wechat_app_secret,
+          enabled_platforms: form.enabled_platforms,
         })
       }
       return api.updateUser(defaultValues.id, {
         name: form.name || undefined,
-        wechat_app_id: form.wechat_app_id || undefined,
-        wechat_app_secret: form.wechat_app_secret || undefined,
+        enabled_platforms: form.enabled_platforms,
       })
     },
     onSuccess: () => {
@@ -65,33 +83,36 @@ function Form({ mode, defaultValues }: {
           />
         </Field>
 
-        <div className="text-xs text-slate-600 bg-amber-50 border-l-4 border-amber-300 rounded p-3 leading-relaxed">
-          <div className="font-semibold text-amber-900 mb-1">📝 公众号 AppID / AppSecret 怎么取</div>
-          1. 登录 <a href="https://mp.weixin.qq.com/" target="_blank" rel="noopener" className="underline text-brand-700">mp.weixin.qq.com</a> 公众号后台<br />
-          2. 左侧菜单 → 「设置与开发」 → 「基本配置」<br />
-          3. 「公众号开发信息」区域复制 <b>开发者 ID(AppID)</b><br />
-          4. AppSecret 点旁边的「重置」（注意：旧 AppSecret 会立即失效）→ 短信验证后显示完整值
-        </div>
+        <Field
+          label="每日仿写平台"
+          hint="cron 0:00 触发；勾上才生成内容。可以晚点改"
+        >
+          <div className="space-y-2 mt-1">
+            {PLATFORMS.map(p => (
+              <label key={p.key} className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1 accent-brand-600"
+                  checked={form.enabled_platforms.includes(p.key)}
+                  onChange={() => togglePlatform(p.key)}
+                />
+                <span className="text-sm">
+                  <span className="font-medium text-slate-800">{p.label}</span>
+                  <span className="text-xs text-slate-500 ml-2">{p.hint}</span>
+                </span>
+              </label>
+            ))}
+            {form.enabled_platforms.length === 0 && (
+              <div className="text-xs text-amber-700">⚠️ 一个都不勾 = 这个用户每天不生成任何内容</div>
+            )}
+          </div>
+        </Field>
 
-        <Field label="公众号 AppID">
-          <input
-            value={form.wechat_app_id}
-            onChange={(e) => setForm({ ...form, wechat_app_id: e.target.value })}
-            placeholder="wx 开头的 18 位字符串"
-            className={inputCls + ' font-mono'}
-            required={mode === 'new'}
-          />
-        </Field>
-        <Field label="公众号 AppSecret" hint={mode === 'edit' ? '留空不改' : '32 位 hex 字符串'}>
-          <input
-            type="password"
-            value={form.wechat_app_secret}
-            onChange={(e) => setForm({ ...form, wechat_app_secret: e.target.value })}
-            placeholder="32 位 hex"
-            className={inputCls + ' font-mono'}
-            required={mode === 'new'}
-          />
-        </Field>
+        <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded p-3 leading-relaxed">
+          <div className="font-semibold text-slate-700 mb-1">💡 公众号 AppID / AppSecret 怎么办？</div>
+          这里 <b>不用填</b>。等你第一次点「推送到草稿箱」按钮时，会弹绑定窗，里面有取 key 的步骤说明。
+          也就是说：没绑也能新建用户，按需绑就行。
+        </div>
 
         {m.error && <Flash tone="error">{(m.error as Error).message}</Flash>}
 
@@ -120,7 +141,12 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 export function UserNew() {
   if (!isAdmin()) return <Navigate to="/" replace />
-  return <Form mode="new" defaultValues={{ id: '', name: '', wechat_app_id: '' }} />
+  return (
+    <Form
+      mode="new"
+      defaultValues={{ id: '', name: '', enabled_platforms: ALL_KEYS }}
+    />
+  )
 }
 
 export function UserEdit() {
@@ -134,13 +160,13 @@ export function UserEdit() {
   if (isLoading) return <p className="text-slate-500">加载中…</p>
   if (error) return <Flash tone="error">加载失败：{(error as Error).message}</Flash>
   if (!data) return <p className="text-slate-500">用户不存在</p>
+  // 后端永远返回数组（缺省 = 4 个全开）。空数组表示用户主动把所有平台都关了，
+  // 不要在这里"善意"展开成全选——会改变用户保存的意图。
+  const enabled = (data.enabled_platforms ?? []) as PlatformKey[]
   return (
     <Form
       mode="edit"
-      defaultValues={{
-        id: data.id, name: data.name,
-        wechat_app_id: data.wechat.app_id || '',
-      }}
+      defaultValues={{ id: data.id, name: data.name, enabled_platforms: enabled }}
     />
   )
 }

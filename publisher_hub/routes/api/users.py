@@ -16,14 +16,18 @@ router = APIRouter()
 class UserCreateBody(BaseModel):
     id:                str = Field(..., min_length=1, max_length=32)
     name:              str = Field(..., min_length=1)
-    wechat_app_id:     str = Field(..., min_length=1)
-    wechat_app_secret: str = Field(..., min_length=1)
+    # wechat key 现在可选；用户首次「推送到草稿箱」时按需绑定
+    wechat_app_id:     str = ''
+    wechat_app_secret: str = ''
+    # 启用哪些平台的每日仿写（不传 = 全平台）
+    enabled_platforms: list[str] | None = None
 
 
 class UserUpdateBody(BaseModel):
     name:              str | None = None
     wechat_app_id:     str | None = None
     wechat_app_secret: str | None = None
+    enabled_platforms: list[str] | None = None
 
 
 def _serialize_user(u: dict, counts: dict[tuple[str, str], int]) -> dict:
@@ -36,12 +40,14 @@ def _serialize_user(u: dict, counts: dict[tuple[str, str], int]) -> dict:
     tt = u.get('toutiao') or {}
     xhs = u.get('xhs') or {}
     uid = u['id']
+    wechat_bound = bool((wc.get('app_id') or '').strip()) and bool((wc.get('app_secret') or '').strip())
     return {
         'id':      uid,
         'name':    u.get('name') or uid,
         'wechat': {
             'app_id': wc.get('app_id') or '',
             'author': wc.get('author') or '',
+            'bound':  wechat_bound,         # 前端按这个决定推送前是否弹绑定 modal
         },
         'xhs': {
             'display_name': xhs.get('display_name') or '',
@@ -49,6 +55,8 @@ def _serialize_user(u: dict, counts: dict[tuple[str, str], int]) -> dict:
         'toutiao': {
             'cdp_port': tt.get('cdp_port'),
         },
+        # 哪些平台启用每日仿写（缺省 = 全开，由 _materialize_user 兜底）
+        'enabled_platforms': list(u.get('enabled_platforms') or []),
         'wechat_count':  counts.get((uid, 'wechat'),  0),
         'xhs_count':     counts.get((uid, 'xhs'),     0),
         'toutiao_count': counts.get((uid, 'toutiao'), 0),
@@ -83,8 +91,12 @@ def create_user(body: UserCreateBody, request: Request, _=Depends(require_admin)
     if err:
         raise HTTPException(400, err)
     try:
-        cfg.add_user(uid, body.name.strip(),
-                     body.wechat_app_id.strip(), body.wechat_app_secret.strip())
+        cfg.add_user(
+            uid, body.name.strip(),
+            wechat_app_id=(body.wechat_app_id or '').strip(),
+            wechat_app_secret=(body.wechat_app_secret or '').strip(),
+            enabled_platforms=body.enabled_platforms,
+        )
     except Exception as e:
         log.error('[api/users] add_user 失败: %s', e, exc_info=True)
         raise HTTPException(500, str(e))
@@ -106,6 +118,7 @@ def update_user(user_id: str, body: UserUpdateBody, request: Request, _=Depends(
             name=(body.name or '').strip() or None,
             wechat_app_id=(body.wechat_app_id or '').strip() or None,
             wechat_app_secret=(body.wechat_app_secret or '').strip() or None,
+            enabled_platforms=body.enabled_platforms,
         )
     except Exception as e:
         log.error('[api/users] update_user 失败: %s', e, exc_info=True)

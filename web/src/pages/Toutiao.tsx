@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { isAdmin } from '@/lib/auth'
+import { canWrite } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
 import type { ToutiaoStatus, DraftStatus } from '@/lib/types'
 
@@ -14,7 +14,7 @@ const STATUS_LABEL: Record<DraftStatus, { text: string; kind: 'ready' | 'pushed'
 export function Toutiao() {
   const { userId = '' } = useParams()
   const qc = useQueryClient()
-  const admin = isAdmin()
+  const admin = canWrite()
 
   // ── 绑定状态 ──────────────────────────────────────────────────
   const { data: status } = useQuery({

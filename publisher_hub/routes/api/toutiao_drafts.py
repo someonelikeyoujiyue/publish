@@ -15,7 +15,7 @@ from ...toutiao_browser import get_browser
 from ...toutiao_publisher import publish_weitoutiao
 from ...feishu import FeishuBot
 from ._helpers import parse_images
-from .auth import require_admin
+from .auth import require_editor
 
 log = logging.getLogger('publisher_hub.api.toutiao_drafts')
 router = APIRouter()
@@ -70,7 +70,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
 
 
 @router.post('/users/{user_id}/toutiao/refresh')
-def refresh(user_id: str, request: Request, _=Depends(require_admin)):
+def refresh(user_id: str, request: Request, _=Depends(require_editor)):
     config  = request.app.state.config
     prompts = request.app.state.prompts
     db      = request.app.state.db

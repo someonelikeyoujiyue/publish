@@ -21,7 +21,7 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import get_user, list_users
+from .config import get_user, has_wechat_binding, is_platform_enabled, list_users
 from .feishu import FeishuBot
 from .rewrite import RewriteEngine
 from .wechat import WeChatPublisher
@@ -146,25 +146,23 @@ def daily_run(app, target_user_id: Optional[str] = None):
         log.info('[cron] ===== daily_run 开始 (%d 个用户) =====', len(users))
         for user in users:
             uid = user['id']
-            try:
-                _process_user_wechat(user, app)
-            except Exception as e:
-                log.exception('[cron] %s wechat 流程整体异常: %s', uid, e)
-
-            try:
-                _process_user_xhs(user, app)
-            except Exception as e:
-                log.exception('[cron] %s xhs 流程整体异常: %s', uid, e)
-
-            try:
-                _process_user_toutiao(user, app)
-            except Exception as e:
-                log.exception('[cron] %s toutiao 流程整体异常: %s', uid, e)
-
-            try:
-                _process_user_douyin(user, app)
-            except Exception as e:
-                log.exception('[cron] %s douyin 流程整体异常: %s', uid, e)
+            # 用户级 enabled_platforms 控制：哪些平台跳过每日仿写
+            # 公众号特殊：还要看是否已绑 AppID/Secret，没绑直接跳（避免每天报错）
+            tasks = [
+                ('wechat',  _process_user_wechat,
+                    has_wechat_binding(user) and is_platform_enabled(user, 'wechat')),
+                ('xhs',     _process_user_xhs,     is_platform_enabled(user, 'xhs')),
+                ('toutiao', _process_user_toutiao, is_platform_enabled(user, 'toutiao')),
+                ('douyin',  _process_user_douyin,  is_platform_enabled(user, 'douyin')),
+            ]
+            for platform_name, fn, enabled in tasks:
+                if not enabled:
+                    log.info('[cron] ⏭ %s/%s 跳过（用户已禁用 或 未绑定）', uid, platform_name)
+                    continue
+                try:
+                    fn(user, app)
+                except Exception as e:
+                    log.exception('[cron] %s %s 流程整体异常: %s', uid, platform_name, e)
 
         log.info('[cron] ===== daily_run 结束 =====')
     finally:

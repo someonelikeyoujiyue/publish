@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
+import { WechatBindModal } from '@/components/WechatBindModal'
 
 const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条', douyin: '抖音图文', youtube: 'YouTube' } as const
 
@@ -19,6 +20,8 @@ export function DraftDetail({ platform }: { platform: Platform }) {
   const id = Number(draftId)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [copied, setCopied] = useState<'' | 'all' | 'title' | 'body'>('')
+  // 公众号未绑 AppID/Secret 时弹绑定 modal
+  const [bindOpen, setBindOpen] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['draft', userId, platform, id],
@@ -36,7 +39,12 @@ export function DraftDetail({ platform }: { platform: Platform }) {
 
   const push = useMutation({
     mutationFn: () => api.push(userId, platform, id),
-    onSuccess: () => {
+    onSuccess: (resp) => {
+      // 公众号专属：缺绑定 → 弹绑定 modal（不算成功也不算失败，等绑定后重推）
+      if (resp.need_binding) {
+        setBindOpen(true)
+        return
+      }
       qc.invalidateQueries({ queryKey: ['draft', userId, platform, id] })
       qc.invalidateQueries({ queryKey: ['drafts', userId, platform] })
     },
@@ -211,7 +219,7 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                 </div>
                 )}
 
-                {(push.data?.ok === false || saveDraftOnly.data?.ok === false) && (
+                {((push.data?.ok === false && !push.data.need_binding) || saveDraftOnly.data?.ok === false) && (
                   <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
                     ✗ {push.data?.error || saveDraftOnly.data?.error}
                   </div>
@@ -242,7 +250,7 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                   </div>
                 )}
 
-                {push.data?.ok === false && (
+                {push.data?.ok === false && !push.data.need_binding && (
                   <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
                     ✗ {push.data.error}
                   </div>
@@ -274,6 +282,22 @@ export function DraftDetail({ platform }: { platform: Platform }) {
         >
           <img src={lightbox} className="max-w-full max-h-full object-contain" />
         </div>
+      )}
+
+      {/* 公众号 AppID / AppSecret 绑定弹窗（首次推送时触发） */}
+      {bindOpen && platform === 'wechat' && (
+        <WechatBindModal
+          userId={userId}
+          onClose={() => setBindOpen(false)}
+          onBound={() => {
+            // 关 modal + 让用户/草稿缓存刷新；自动再点一次推送
+            setBindOpen(false)
+            qc.invalidateQueries({ queryKey: ['users'] })
+            qc.invalidateQueries({ queryKey: ['user', userId] })
+            push.reset()
+            push.mutate()
+          }}
+        />
       )}
     </>
   )

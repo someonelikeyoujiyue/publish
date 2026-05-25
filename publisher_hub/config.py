@@ -22,6 +22,9 @@ _PROMPTS_PATH = _PROJECT_ROOT / 'prompts.yaml'
 
 _USER_ID_RE = re.compile(r'^[a-z0-9_-]{1,32}$')
 
+# 用户级别支持的平台。新用户默认全开；admin 可在「编辑用户」勾选关掉。
+ALL_PLATFORMS = ('wechat', 'xhs', 'toutiao', 'douyin')
+
 # 写文件专用：保留注释、引号、缩进、非 ASCII 字符（中文不转义）
 _ruamel = YAML()
 _ruamel.preserve_quotes = True
@@ -139,7 +142,26 @@ def _materialize_user(raw: dict, defaults: dict) -> dict:
     xhs = merged.setdefault('xhs', {})
     if not xhs.get('display_name'):
         xhs['display_name'] = f"{merged.get('name') or merged['id']} 的小红书"
+    # enabled_platforms 缺省 = 全开。yaml 里写了空列表就当全关。
+    if 'enabled_platforms' not in merged:
+        merged['enabled_platforms'] = list(ALL_PLATFORMS)
     return merged
+
+
+def is_platform_enabled(user: dict, platform: str) -> bool:
+    """user 上是否启用了某平台的每日仿写。"""
+    if not user:
+        return False
+    enabled = user.get('enabled_platforms')
+    if enabled is None:
+        return platform in ALL_PLATFORMS
+    return platform in enabled
+
+
+def has_wechat_binding(user: dict) -> bool:
+    """user 是否已绑定公众号（app_id + app_secret 都非空）。"""
+    wc = (user or {}).get('wechat') or {}
+    return bool((wc.get('app_id') or '').strip()) and bool((wc.get('app_secret') or '').strip())
 
 
 def _resolved_defaults(config: dict) -> dict:
@@ -194,41 +216,60 @@ def validate_user_id(user_id: str, config: dict, allow_existing: bool = False) -
     return ''
 
 
-def add_user(user_id: str, name: str, wechat_app_id: str, wechat_app_secret: str) -> dict:
-    """追加一个用户到 config.yaml。返回创建的 raw 记录。"""
+def add_user(user_id: str, name: str,
+             wechat_app_id: str = '', wechat_app_secret: str = '',
+             enabled_platforms: Optional[list[str]] = None) -> dict:
+    """追加一个用户到 config.yaml。返回创建的 raw 记录。
+
+    wechat key 现在可选；新建时不强制，用户首次「推送到草稿箱」时再补绑。
+    enabled_platforms 留空 = 全平台启用。
+    """
     data = _load_yaml_for_write()
     users = data.setdefault('users', [])
 
     # 创建新记录（只填差异字段，其它继承 _default_user）
-    new_user = {
+    new_user: dict = {
         'id':   user_id,
         'name': name,
-        'wechat': {
-            'app_id':     wechat_app_id,
-            'app_secret': wechat_app_secret,
-        },
     }
+    if wechat_app_id or wechat_app_secret:
+        new_user['wechat'] = {
+            'app_id':     wechat_app_id or '',
+            'app_secret': wechat_app_secret or '',
+        }
+    if enabled_platforms is not None:
+        # 只接受白名单内的，且按固定顺序写回（yaml 可读性）
+        clean = [p for p in ALL_PLATFORMS if p in set(enabled_platforms)]
+        new_user['enabled_platforms'] = clean
     users.append(new_user)
     _save_yaml(data)
-    log.info('[config] 新增用户 %s', user_id)
+    log.info('[config] 新增用户 %s enabled=%s', user_id, new_user.get('enabled_platforms'))
     return new_user
 
 
 def update_user(user_id: str,
                 name: Optional[str] = None,
                 wechat_app_id: Optional[str] = None,
-                wechat_app_secret: Optional[str] = None) -> None:
-    """部分更新一个用户。空字符串 / None 表示保持原值。"""
+                wechat_app_secret: Optional[str] = None,
+                enabled_platforms: Optional[list[str]] = None) -> None:
+    """部分更新一个用户。空字符串 / None 表示保持原值。
+
+    enabled_platforms 传 list 才会写；传 None 不动；传空列表 = 全关。
+    """
     data = _load_yaml_for_write()
     for u in data.get('users') or []:
         if u.get('id') == user_id:
             if name:
                 u['name'] = name
-            wc = u.setdefault('wechat', {})
-            if wechat_app_id:
-                wc['app_id'] = wechat_app_id
-            if wechat_app_secret:
-                wc['app_secret'] = wechat_app_secret
+            if wechat_app_id is not None or wechat_app_secret is not None:
+                wc = u.setdefault('wechat', {})
+                if wechat_app_id:
+                    wc['app_id'] = wechat_app_id
+                if wechat_app_secret:
+                    wc['app_secret'] = wechat_app_secret
+            if enabled_platforms is not None:
+                clean = [p for p in ALL_PLATFORMS if p in set(enabled_platforms)]
+                u['enabled_platforms'] = clean
             _save_yaml(data)
             log.info('[config] 更新用户 %s', user_id)
             return

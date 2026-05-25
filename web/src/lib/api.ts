@@ -31,24 +31,31 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
-interface LoginResp { token: string; role: 'admin' | 'user'; expires_at: number }
+type RoleResp = 'admin' | 'editor' | 'user'
+interface LoginResp { token: string; role: RoleResp; expires_at: number }
 export const authApi = {
   login:  (username: string, password: string) =>
     req<LoginResp>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   logout: () =>
     req<{ ok: boolean }>('/logout', { method: 'POST', body: '{}' }),
   me:     () =>
-    req<{ role: 'admin' | 'user'; expires_at: number }>('/me'),
+    req<{ role: RoleResp; expires_at: number }>('/me'),
 }
 
 export const api = {
   // users
   listUsers: () => req<{ users: User[] }>('/users'),
   getUser:   (id: string) => req<User>(`/users/${id}`),
-  createUser: (body: { id: string; name: string; wechat_app_id: string; wechat_app_secret: string }) =>
-    req<User>('/users', { method: 'POST', body: JSON.stringify(body) }),
-  updateUser: (id: string, body: { name?: string; wechat_app_id?: string; wechat_app_secret?: string }) =>
-    req<User>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  createUser: (body: {
+    id: string; name: string;
+    wechat_app_id?: string; wechat_app_secret?: string;
+    enabled_platforms?: string[];
+  }) => req<User>('/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateUser: (id: string, body: {
+    name?: string;
+    wechat_app_id?: string; wechat_app_secret?: string;
+    enabled_platforms?: string[];
+  }) => req<User>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteUser: (id: string) =>
     req<void>(`/users/${id}`, { method: 'DELETE' }),
 
@@ -61,11 +68,42 @@ export const api = {
     req<{ ok: boolean; new_count?: number; error?: string }>(
       `/users/${userId}/${platform}/refresh`, { method: 'POST', body: '{}' },
     ),
-  push: (userId: string, platform: Platform, id: number, opts: { draft_only?: boolean } = {}) =>
-    req<{ ok: boolean; media_id?: string; qr_url?: string; error?: string; final_url?: string; mode?: string }>(
-      `/users/${userId}/${platform}/drafts/${id}/push`,
-      { method: 'POST', body: JSON.stringify(opts) },
-    ),
+  push: async (
+    userId: string, platform: Platform, id: number, opts: { draft_only?: boolean } = {},
+  ): Promise<{
+    ok: boolean; need_binding?: boolean;
+    media_id?: string; qr_url?: string; error?: string; final_url?: string; mode?: string;
+  }> => {
+    // 不走 req 包装，因为我们要把 409 当业务返回值（need_binding 弹绑定 modal），
+    // 而不是抛异常。
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(
+      `${BASE}/users/${userId}/${platform}/drafts/${id}/push`,
+      { method: 'POST', headers, body: JSON.stringify(opts) },
+    )
+    if (res.status === 401) {
+      clearSession()
+      if (!location.pathname.startsWith('/login')) location.href = '/login?reason=expired'
+      throw new Error('登录已过期')
+    }
+    const bodyText = await res.text()
+    let body: { detail?: { need_binding?: boolean; message?: string } } & Record<string, unknown> = {}
+    try { body = bodyText ? JSON.parse(bodyText) : {} } catch { /* not json */ }
+    // FastAPI HTTPException(409, detail={...}) 实际响应是 {"detail": {...}}
+    const detail = body.detail
+    if (res.status === 409 && detail && typeof detail === 'object' && detail.need_binding) {
+      return { ok: false, need_binding: true, error: detail.message || '需要先绑定公众号' }
+    }
+    if (!res.ok) {
+      const msg = (detail && typeof detail === 'object' ? detail.message : undefined)
+        ?? (typeof detail === 'string' ? detail : undefined)
+        ?? bodyText
+      throw new Error(`HTTP ${res.status}: ${msg}`)
+    }
+    return body as { ok: boolean; media_id?: string; qr_url?: string; error?: string; final_url?: string; mode?: string }
+  },
 
   // toutiao
   toutiaoStatus: (userId: string) =>
@@ -84,6 +122,11 @@ export const api = {
     req<{ ok: boolean; draft_id: number; status: string }>(
       `/users/${userId}/youtube/submit`,
       { method: 'POST', body: JSON.stringify(body) },
+    ),
+  ytDelete: (userId: string, draftId: number) =>
+    req<{ ok: boolean; draft_id: number; dir_removed: boolean; slug: string | null }>(
+      `/users/${userId}/youtube/drafts/${draftId}`,
+      { method: 'DELETE' },
     ),
 
   ytUpload: async (

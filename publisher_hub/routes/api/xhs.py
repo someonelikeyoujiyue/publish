@@ -11,7 +11,7 @@ from ...feishu import FeishuBot
 from ...rewrite import RewriteEngine
 from ...xhs import XhsPublisher
 from ._helpers import parse_images
-from .auth import require_admin
+from .auth import require_editor
 
 log = logging.getLogger('publisher_hub.api.xhs')
 router = APIRouter()
@@ -72,7 +72,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
 
 
 @router.post('/users/{user_id}/xhs/refresh')
-def refresh(user_id: str, request: Request, _=Depends(require_admin)):
+def refresh(user_id: str, request: Request, _=Depends(require_editor)):
     config  = request.app.state.config
     prompts = request.app.state.prompts
     db      = request.app.state.db

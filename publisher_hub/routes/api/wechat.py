@@ -6,12 +6,12 @@ import logging
 import markdown2
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from ...config import get_user
+from ...config import get_user, has_wechat_binding
 from ...feishu import FeishuBot
 from ...rewrite import RewriteEngine
 from ...wechat import WeChatPublisher
 from ._helpers import parse_images
-from .auth import require_admin
+from .auth import require_editor, require_login
 
 log = logging.getLogger('publisher_hub.api.wechat')
 router = APIRouter()
@@ -72,7 +72,7 @@ def get_draft(user_id: str, draft_id: int, request: Request):
 
 
 @router.post('/users/{user_id}/wechat/refresh')
-def refresh(user_id: str, request: Request, _=Depends(require_admin)):
+def refresh(user_id: str, request: Request, _=Depends(require_editor)):
     config  = request.app.state.config
     prompts = request.app.state.prompts
     db      = request.app.state.db
@@ -88,7 +88,7 @@ def refresh(user_id: str, request: Request, _=Depends(require_admin)):
 
 
 @router.post('/users/{user_id}/wechat/drafts/{draft_id}/push')
-def push(user_id: str, draft_id: int, request: Request):
+def push(user_id: str, draft_id: int, request: Request, _=Depends(require_login)):
     config = request.app.state.config
     db     = request.app.state.db
     user   = get_user(config, user_id)
@@ -97,6 +97,16 @@ def push(user_id: str, draft_id: int, request: Request):
     draft = db.get_draft(draft_id)
     if not draft or draft['user_id'] != user_id or draft['platform'] != PLATFORM:
         raise HTTPException(404)
+
+    # 公众号 AppID / AppSecret 未绑定 → 409，前端据此弹绑定 modal
+    if not has_wechat_binding(user):
+        raise HTTPException(
+            409,
+            detail={
+                'need_binding': True,
+                'message':      '该用户还没绑定公众号 AppID / AppSecret，请先在弹窗中填入',
+            },
+        )
 
     publisher = WeChatPublisher(user.get('wechat') or {})
     result = publisher.push(draft)
