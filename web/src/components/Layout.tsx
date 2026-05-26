@@ -81,6 +81,7 @@ export function Layout() {
             <TabLink to={`/${currentUser.id}/toutiao`} active={pathname.startsWith(`/${currentUser.id}/toutiao`)}>📱 今日头条<Pill>{currentUser.toutiao_count}</Pill></TabLink>
             <TabLink to={`/${currentUser.id}/douyin`}  active={pathname.startsWith(`/${currentUser.id}/douyin`)}>🎵 抖音<Pill>{currentUser.douyin_count}</Pill></TabLink>
             <TabLink to={`/${currentUser.id}/youtube`} active={pathname.startsWith(`/${currentUser.id}/youtube`)}>📺 YouTube<Pill>{currentUser.youtube_count}</Pill></TabLink>
+            <TabLink to={`/${currentUser.id}/video`}   active={pathname.startsWith(`/${currentUser.id}/video`)}>🎬 短视频</TabLink>
           </div>
         </div>
       )}

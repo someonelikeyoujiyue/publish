@@ -1,0 +1,25 @@
+{
+  "name": "remotion-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remotion-based video renderer (replacement for Pixelle frame_html + ffmpeg pipeline)",
+  "type": "module",
+  "scripts": {
+    "render:sample": "tsx scripts/render-sample.ts",
+    "render:job": "tsx scripts/render-from-job.ts"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.366",
+    "@remotion/cli": "4.0.366",
+    "@remotion/bundler": "4.0.366",
+    "@remotion/renderer": "4.0.366"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@types/react": "19.2.2",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2"
+  }
+}

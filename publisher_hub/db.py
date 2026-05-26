@@ -35,6 +35,31 @@ CREATE TABLE IF NOT EXISTS hub_drafts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
+_HUB_VIDEO_JOBS_DDL = """
+CREATE TABLE IF NOT EXISTS hub_video_jobs (
+    id               INT AUTO_INCREMENT PRIMARY KEY,
+    user_id          VARCHAR(50) NOT NULL,
+    topic            TEXT,                    -- 用户输入的话题（可空，如果提供了 narrations）
+    title            TEXT,                    -- LLM 生的或用户给的视频标题
+    narrations_json  LONGTEXT,                -- JSON array of narration strings
+    image_paths_json LONGTEXT,                -- JSON array of 绝对路径（用户上传 + 默认补足后的最终列表）
+    voice            VARCHAR(60),             -- edge-tts voice preset key
+    rate             VARCHAR(10),             -- 语速 e.g. "+5%"
+    bgm_path         TEXT,                    -- 用户指定 BGM 绝对路径（可空，空 = 默认）
+    bgm_volume       FLOAT DEFAULT 0.2,
+    n_scenes         INT,                     -- 期望段数（用户没传 narrations 时生效）
+    status           ENUM('pending','processing','done','failed') DEFAULT 'pending',
+    output_path      TEXT,                    -- 最终 mp4 绝对路径
+    duration_sec     FLOAT,
+    file_size        BIGINT,
+    error_msg        TEXT,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user_status (user_id, status),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
 
 class Database:
     """同步 pymysql 封装。
@@ -103,6 +128,7 @@ class Database:
     def _ensure_hub_drafts_table(self):
         with self._cur() as cur:
             cur.execute(_HUB_DRAFTS_DDL)
+            cur.execute(_HUB_VIDEO_JOBS_DDL)
 
     # ── 读 newmedia.posts（按用户配置过滤）────────────────────────────
 
@@ -350,3 +376,127 @@ class Database:
                 )
         except Exception as e:
             log.warning('[db] mark_failed 失败: %s', e)
+
+    def delete_draft(self, draft_id: int) -> int:
+        try:
+            with self._cur() as cur:
+                cur.execute("DELETE FROM hub_drafts WHERE id=%s", (draft_id,))
+                return cur.rowcount
+        except Exception as e:
+            log.warning('[db] delete_draft 失败: %s', e)
+            return 0
+
+    # ── hub_video_jobs 操作（短视频生成）────────────────────────────────
+
+    def create_video_job(
+        self,
+        user_id: str,
+        topic: str = '',
+        narrations: list[str] | None = None,
+        image_paths: list[str] | None = None,
+        title: str = '',
+        voice: str | None = None,
+        rate: str | None = None,
+        bgm_path: str | None = None,
+        bgm_volume: float | None = None,
+        n_scenes: int | None = None,
+    ) -> int:
+        """插入一条 pending 状态的视频 job，返回 job_id。"""
+        import json as _json
+        with self._cur() as cur:
+            cur.execute(
+                """INSERT INTO hub_video_jobs
+                   (user_id, topic, title, narrations_json, image_paths_json,
+                    voice, rate, bgm_path, bgm_volume, n_scenes, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending')""",
+                (
+                    user_id, topic or '', title or '',
+                    _json.dumps(narrations or [], ensure_ascii=False),
+                    _json.dumps(image_paths or [], ensure_ascii=False),
+                    voice, rate, bgm_path,
+                    bgm_volume if bgm_volume is not None else 0.2,
+                    n_scenes,
+                ),
+            )
+            return cur.lastrowid
+
+    def get_video_job(self, job_id: int) -> dict | None:
+        """读一条 job；narrations/image_paths 字段自动 JSON 反序列化。"""
+        import json as _json
+        with self._cur() as cur:
+            cur.execute("SELECT * FROM hub_video_jobs WHERE id=%s", (job_id,))
+            r = cur.fetchone()
+        if not r:
+            return None
+        try:
+            r['narrations'] = _json.loads(r.pop('narrations_json') or '[]')
+        except (ValueError, TypeError):
+            r['narrations'] = []
+        try:
+            r['image_paths'] = _json.loads(r.pop('image_paths_json') or '[]')
+        except (ValueError, TypeError):
+            r['image_paths'] = []
+        return r
+
+    def list_video_jobs(self, user_id: str, limit: int = 50) -> list[dict]:
+        """列出用户最近的视频 job（最新在前）。narrations/image_paths 反序列化。"""
+        import json as _json
+        with self._cur() as cur:
+            cur.execute(
+                """SELECT id, user_id, topic, title, narrations_json, image_paths_json,
+                          status, output_path, duration_sec, file_size, error_msg,
+                          created_at, updated_at
+                   FROM hub_video_jobs
+                   WHERE user_id=%s ORDER BY id DESC LIMIT %s""",
+                (user_id, limit),
+            )
+            rows = cur.fetchall() or []
+        for r in rows:
+            try:
+                r['narrations'] = _json.loads(r.pop('narrations_json') or '[]')
+            except (ValueError, TypeError):
+                r['narrations'] = []
+            try:
+                r['image_paths'] = _json.loads(r.pop('image_paths_json') or '[]')
+            except (ValueError, TypeError):
+                r['image_paths'] = []
+        return rows
+
+    def update_video_job(self, job_id: int, **fields) -> None:
+        """部分更新一条 job。允许的字段在白名单内；narrations/image_paths 自动 JSON 序列化。"""
+        import json as _json
+        if not fields:
+            return
+        ALLOWED = {
+            'status', 'title', 'output_path', 'duration_sec', 'file_size',
+            'error_msg', 'voice', 'rate', 'bgm_path', 'bgm_volume', 'n_scenes',
+            'topic',
+        }
+        sets, params = [], []
+        for k, v in fields.items():
+            if k in ALLOWED:
+                sets.append(f'{k}=%s')
+                params.append(v)
+            elif k == 'narrations':
+                sets.append('narrations_json=%s')
+                params.append(_json.dumps(v or [], ensure_ascii=False))
+            elif k == 'image_paths':
+                sets.append('image_paths_json=%s')
+                params.append(_json.dumps(v or [], ensure_ascii=False))
+            else:
+                log.warning('[db] update_video_job 忽略未知字段: %s', k)
+        if not sets:
+            return
+        params.append(job_id)
+        sql = f'UPDATE hub_video_jobs SET {", ".join(sets)} WHERE id=%s'
+        with self._cur() as cur:
+            cur.execute(sql, params)
+
+    def delete_video_job(self, job_id: int) -> int:
+        try:
+            with self._cur() as cur:
+                cur.execute("DELETE FROM hub_video_jobs WHERE id=%s", (job_id,))
+                return cur.rowcount
+        except Exception as e:
+            log.warning('[db] delete_video_job 失败: %s', e)
+            return 0

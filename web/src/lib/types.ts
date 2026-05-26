@@ -13,6 +13,22 @@ export interface User {
   youtube_count: number
 }
 
+export interface VideoJob {
+  id: number
+  user_id: string
+  topic: string
+  title: string
+  narrations: string[]
+  image_count: number
+  status: 'pending' | 'processing' | 'done' | 'failed'
+  video_url: string             // e.g. "/video-jobs/42/output.mp4"
+  duration_sec: number | null
+  file_size: number | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface YoutubeDraft {
   id: number
   title: string

@@ -23,6 +23,8 @@ dependencies = [
     "opencv-contrib-python-headless>=4.10",
     "pyzbar>=0.1.9",
     "openai>=1.40",
+    # 短视频生成模块：免费 AI 配音（edge-tts 调 Microsoft Edge 浏览器协议）
+    "edge-tts>=7.0",
 ]
 
 [project.optional-dependencies]

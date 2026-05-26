@@ -9,6 +9,7 @@ import { DraftDetail } from './pages/DraftDetail'
 import { Toutiao } from './pages/Toutiao'
 import { Youtube } from './pages/Youtube'
 import { YoutubeDetail } from './pages/YoutubeDetail'
+import { Video } from './pages/Video'
 import { Admin } from './pages/Admin'
 
 export function App() {
@@ -30,6 +31,7 @@ export function App() {
         <Route path="/:userId/douyin/:draftId" element={<DraftDetail platform="douyin" />} />
         <Route path="/:userId/youtube" element={<Youtube />} />
         <Route path="/:userId/youtube/:draftId" element={<YoutubeDetail />} />
+        <Route path="/:userId/video" element={<Video />} />
       </Route>
     </Routes>
   )

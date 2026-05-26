@@ -1,6 +1,6 @@
 import type {
   User, Platform, DraftSummary, DraftDetail, ToutiaoStatus, BindResult,
-  YoutubeDraft, YoutubeDraftDetail,
+  YoutubeDraft, YoutubeDraftDetail, VideoJob,
 } from './types'
 import { getToken, clearSession } from './auth'
 
@@ -166,6 +166,68 @@ export const api = {
     }
     return res.json()
   },
+
+  // ── video（短视频生成） ─────────────────────────────────────────────
+  videoOptions: () =>
+    req<{
+      voices: { key: string; code: string }[]
+      default_voice: string
+      default_rate: string
+    }>('/video/options'),
+
+  videoJobs: (userId: string) =>
+    req<{ jobs: VideoJob[] }>(`/users/${userId}/video/jobs`),
+
+  videoJob: (userId: string, jobId: number) =>
+    req<VideoJob>(`/users/${userId}/video/jobs/${jobId}`),
+
+  videoSubmit: async (
+    userId: string,
+    form: {
+      topic: string
+      title?: string
+      narrations?: string
+      n_scenes?: number
+      voice?: string
+      rate?: string
+      images?: File[]
+    },
+  ): Promise<{ ok: boolean; job_id: number; status: string }> => {
+    const fd = new FormData()
+    fd.append('topic',      form.topic)
+    fd.append('title',      form.title ?? '')
+    fd.append('narrations', form.narrations ?? '')
+    fd.append('n_scenes',   String(form.n_scenes ?? 3))
+    fd.append('voice',      form.voice ?? 'zh-xiaoxiao-female')
+    fd.append('rate',       form.rate ?? '+5%')
+    for (const f of form.images ?? []) {
+      fd.append('images', f)
+    }
+    const headers: Record<string, string> = {}
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${BASE}/users/${userId}/video/generate`, {
+      method: 'POST', headers, body: fd,
+    })
+    if (res.status === 401) {
+      clearSession()
+      if (!location.pathname.startsWith('/login')) location.href = '/login?reason=expired'
+      throw new Error('登录已过期')
+    }
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try { msg = JSON.parse(text).detail || text } catch { /* not json */ }
+      throw new Error(`HTTP ${res.status}: ${msg}`)
+    }
+    return res.json()
+  },
+
+  videoDelete: (userId: string, jobId: number) =>
+    req<{ ok: boolean; job_id: number; dir_removed: boolean }>(
+      `/users/${userId}/video/jobs/${jobId}`,
+      { method: 'DELETE' },
+    ),
 
   // admin
   runNow: (userId?: string) =>

@@ -1,0 +1,9 @@
+node_modules/
+output/
+public/scene_*
+public/*.mp3
+public/*.jpg
+public/*.JPG
+public/*.png
+.DS_Store
+*.log
