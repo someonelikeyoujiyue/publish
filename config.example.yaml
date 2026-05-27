@@ -23,7 +23,7 @@ mysql:
 # ── 2. 仿写 LLM（valueclue 兼容 OpenAI 接口）───────────────────────────────────
 llm:
   api_key:  "<VALUECLUE_API_KEY>"
-  base_url: "https://valueclue.com/claw/api/proxy/v1"
+  base_url: "https://valueclue.top/claw/api/proxy/v1"
   model:    "deepseek-v4-pro"
   max_tokens: 50000             # stream 模式下给足 reasoning + 正文 token
   timeout_seconds: 300
