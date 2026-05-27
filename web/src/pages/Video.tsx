@@ -151,14 +151,17 @@ export function Video() {
             />
           </Field>
 
-          <Field label="文案 narrations" hint="每行一段；留空 = LLM 按 xhs/douyin 风格生 N 段">
+          <Field
+            label="文案 narrations"
+            hint="每行一段；粘一大坨也行，后端会按句切；留空 = LLM 生"
+          >
             <textarea
               value={narrations}
               onChange={(e) => setNarrations(e.target.value)}
               placeholder={
-                '例（不写就让 LLM 写）：\n兰实大学位于泰国曼谷北部。\n本科学费 3-8 万人民币每年。\n中国教育部认证 19 年零中断。'
+                '可以每行一段：\n  兰实大学位于泰国曼谷北部。\n  本科学费 3-8 万人民币每年。\n\n或直接粘一整段，后端按 句号/分号/逗号 自动切成 ≤30 字的短句\n（长视频长配音都没问题，时长不限）'
               }
-              rows={5}
+              rows={6}
               className={inputCls + ' font-mono'}
             />
           </Field>

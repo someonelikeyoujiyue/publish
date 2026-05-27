@@ -100,6 +100,92 @@ def _safe_filename(name: str) -> str:
     return name[:80] or 'upload'
 
 
+# ── 智能分段：用户粘一大坨文案进来自动切成 TTS/字幕友好的短句 ──────────────────
+
+_SENT_END   = r'。！？!?;；'
+_SOFT_BREAK = r'，、,'
+_LONG_LINE_THRESHOLD = 35   # 单行 > 这个字符数才触发拆分
+_TARGET_MAX = 30            # 期望段长上限
+_HARD_MAX   = 45            # 段长不能超的硬上限
+_MIN_CHARS  = 10            # 段长不能少于这个（少了跟前一段合并）
+
+
+def _smart_split_narration(text: str) -> list[str]:
+    """把一段长文案切成短句。
+
+    优先级：句末标点 (。！？；) > 软标点 (，、) > 硬切。
+    保证每段在 [MIN_CHARS, HARD_MAX] 之间。
+
+    例：
+      入："兰实大学位于泰国曼谷北部，是泰国最大的私立大学之一。本科学费每年约 7-9 万。"
+      出：["兰实大学位于泰国曼谷北部", "是泰国最大的私立大学之一。", "本科学费每年约 7-9 万。"]
+    """
+    if not text or not text.strip():
+        return []
+
+    # Step 1: 按句末标点切（保留标点在句末）
+    parts = re.split(rf'(?<=[{_SENT_END}])\s*', text.strip())
+    parts = [p.strip() for p in parts if p.strip()]
+
+    # Step 2: 单段仍 > HARD_MAX → 按软标点继续切，聚合到 ≤ TARGET_MAX
+    refined: list[str] = []
+    for p in parts:
+        if len(p) <= _HARD_MAX:
+            refined.append(p)
+            continue
+        sub = re.split(rf'(?<=[{_SOFT_BREAK}])\s*', p)
+        sub = [s.strip() for s in sub if s.strip()]
+        buf = ''
+        for s in sub:
+            if len(buf) + len(s) <= _TARGET_MAX:
+                buf += s
+            else:
+                if buf:
+                    refined.append(buf)
+                buf = s
+        if buf:
+            refined.append(buf)
+
+    # Step 3: 太短的（< MIN_CHARS）跟前一段合并
+    merged: list[str] = []
+    for s in refined:
+        if merged and len(merged[-1]) < _MIN_CHARS:
+            merged[-1] = merged[-1] + s
+        else:
+            merged.append(s)
+
+    # Step 4: 极端无标点 / 仍然超长 → 硬切
+    final: list[str] = []
+    for s in merged:
+        if len(s) <= _HARD_MAX:
+            final.append(s)
+        else:
+            for i in range(0, len(s), _TARGET_MAX):
+                final.append(s[i:i + _TARGET_MAX])
+
+    return final
+
+
+def _normalize_narrations(raw: str) -> list[str]:
+    """处理用户提交的 narrations textarea 内容：
+
+    1. 按换行切
+    2. 每行如果太长（> LONG_LINE_THRESHOLD）走 smart split；否则原样保留
+    3. 去重去空
+    """
+    out: list[str] = []
+    for line in (raw or '').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) <= _LONG_LINE_THRESHOLD:
+            out.append(line)
+        else:
+            pieces = _smart_split_narration(line)
+            out.extend(pieces if pieces else [line])
+    return out
+
+
 @router.post('/users/{user_id}/video/generate', status_code=202)
 async def generate_video(
     user_id: str,
@@ -127,8 +213,11 @@ async def generate_video(
     if not get_user(config, user_id):
         raise HTTPException(404, '用户不存在')
 
-    # 解析 narrations：按换行切，去空行
-    narration_lines = [l.strip() for l in (narrations or '').splitlines() if l.strip()]
+    # 解析 narrations：按换行切 + 长段智能拆句（用户粘一大坨也能用）
+    raw_line_count = sum(1 for l in (narrations or '').splitlines() if l.strip())
+    narration_lines = _normalize_narrations(narrations or '')
+    if raw_line_count and len(narration_lines) != raw_line_count:
+        log.info('[video] narration smart-split: %d 行 → %d 段', raw_line_count, len(narration_lines))
     # 都空也允许：pipeline 内部会从默认话题列表挑一个跑（前端提交前已弹确认）
 
     # 1. 先插 DB 拿 job_id
