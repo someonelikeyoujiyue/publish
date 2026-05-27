@@ -197,18 +197,14 @@ class VideoGenPipeline:
             log.info('[pipeline] 用户提供 narrations %d 段，跳过 LLM', len(narrations))
         else:
             if not topic:
-                # 用户什么都没填：从 newmedia.posts 拉一条原帖当种子（类似 cron 仿写）
+                # 用户什么都没填：从 newmedia.posts 拉一条当 LLM 种子（只取文字，图统一走默认 RSU）
                 user_cfg = get_publisher_user(self.config, job['user_id']) or {}
-                seed_topic, seed_img = seed_post_mod.fetch_seed_post(
+                seed_topic = seed_post_mod.fetch_seed_topic(
                     user_id=job['user_id'], user=user_cfg, db=db,
-                    config=self.config, image_dir=job_dir / 'images',
                 )
                 if seed_topic:
                     topic = seed_topic
                     log.info('[pipeline] 用 DB 种子帖 → topic=%r (%d 字)', topic[:40], len(topic))
-                    if seed_img:
-                        user_images = list(user_images) + [str(seed_img.resolve())]
-                        db.update_video_job(job_id, image_paths=user_images)
                 else:
                     topic = DEFAULT_TOPIC_FALLBACK
                     log.info('[pipeline] DB 无可用帖，回退兜底话题: %s', topic)

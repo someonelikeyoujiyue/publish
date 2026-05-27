@@ -323,10 +323,10 @@ export function Video() {
               <ul className="list-disc pl-5 text-slate-600 space-y-1">
                 <li>
                   从 <b>数据库</b> 随机拉一条最近抓到的原帖（按你的 xhs.sources 过滤）
-                  当种子
+                  当文案种子
                 </li>
                 <li>LLM 用 video_narration prompt 把帖子改写成 3 段旁白</li>
-                <li>原帖封面 + 默认 RSU 校园图凑 3 张</li>
+                <li>图片统一用 <b>默认 RSU 校园图</b>（原帖封面 CDN 不稳定，不用）</li>
                 <li>edge-tts 配音 → Remotion 渲染 1080×1920 mp4</li>
               </ul>
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
