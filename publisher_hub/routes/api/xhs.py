@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 from ...config import get_user
 from ...feishu import FeishuBot
-from ...image_gen import ImageGenerator
 from ...rewrite import RewriteEngine
 from ...xhs import XhsPublisher
 from ._helpers import parse_images
@@ -327,19 +326,52 @@ async def upload_images(
     return {'ok': True, 'added': new_urls, 'total': len(updated)}
 
 
-class _RegenImgBody(BaseModel):
-    prompt: str | None = None
+def _post_cover_url(post: dict, mysql_cfg: dict) -> str:
+    """post.cover_local_path → newmedia 的 /img/cover/... HTTP URL。"""
+    local = post.get('cover_local_path') or post.get('attachment_local_path') or ''
+    if not local:
+        return ''
+    server     = (mysql_cfg.get('image_server_url') or '').rstrip('/')
+    cover_dir  = (mysql_cfg.get('cover_dir')        or '/data/newmedia/covers').rstrip('/')
+    attach_dir = (mysql_cfg.get('attachment_dir')   or '/data/newmedia/attachments').rstrip('/')
+    if not server:
+        return ''
+    if local.startswith(cover_dir + '/'):
+        return f'{server}/img/cover/{local[len(cover_dir) + 1:]}'
+    if local.startswith(attach_dir + '/'):
+        return f'{server}/img/attach/{local[len(attach_dir) + 1:]}'
+    return ''
+
+
+def _ngram_relevance(target: str, desc: str, n: int = 2) -> int:
+    """简单 n-gram 重叠 score。target / desc 都是中文短文本。
+
+    n=2：「兰实大学」-> {兰实, 实大, 大学}；desc 里命中的越多 score 越高。
+    速度够快，不需要分词库。
+    """
+    if not target or not desc:
+        return 0
+    target_grams = {target[i:i + n] for i in range(len(target) - n + 1)}
+    return sum(1 for g in target_grams if g in desc)
 
 
 @router.post('/users/{user_id}/xhs/drafts/{draft_id}/images/{index}/regenerate')
 def regenerate_image(
-    user_id: str, draft_id: int, index: int, body: _RegenImgBody,
+    user_id: str, draft_id: int, index: int,
     request: Request, _=Depends(require_editor),
 ):
-    """调 wan2.7 生新图，替换第 index 张。
+    """从 newmedia.posts 里找一张相关图替换第 index 张。
 
-    prompt 没传就从 draft.title + 第一段正文派生。
+    流程：
+      1. 按用户 xhs.sources 拉一池随机 posts（限 30 条）
+      2. 过滤出有 cover_local_path 的
+      3. 用 2-gram 重叠算 narration vs cover_image_desc 相关度
+      4. 取 top-5 随机一个（避免每次都返回同一张）
+      5. cover_local_path 转 /img/cover/... HTTP URL 写入 image_urls
+
+    没有 cover_image_desc 的候选直接随机抽。
     """
+    import random as _random
     config = request.app.state.config
     db     = request.app.state.db
     draft = db.get_draft(draft_id)
@@ -349,24 +381,52 @@ def regenerate_image(
     if index < 0 or index >= len(imgs):
         raise HTTPException(400, f'index 越界 (有 {len(imgs)} 张)')
 
-    # 派生 prompt
-    prompt = (body.prompt or '').strip()
-    if not prompt:
-        title = (draft.get('title') or '').strip()
-        content = (draft.get('content') or '').strip()
-        # 取前 80 字内容做提示词种子
-        snippet = content.split('\n')[0][:80] if content else ''
-        prompt = (title + ' ' + snippet).strip() or '泰国兰实大学校园场景，真实摄影，自然光'
+    user = get_user(config, user_id) or {}
+    sources = ((user.get('xhs') or {}).get('sources')
+               or (user.get('video') or {}).get('sources')
+               or {})
+    if not sources.get('platforms'):
+        raise HTTPException(400, '用户 xhs.sources.platforms 没配，无法从 DB 找图')
 
-    ig = ImageGenerator(config)
-    if not ig.enabled:
-        raise HTTPException(503, 'image_gen 未启用 / api_key 未配置')
+    # 拉一池候选（platform='xhs_regen_img' 跟 hub_drafts.platform ENUM 不冲突 → LEFT JOIN 不排除）
+    posts = db.get_posts_for_user(
+        user_id=user_id, platform='xhs_regen_img', sources=sources,
+        limit=30, pick_strategy='random',
+    )
+    candidates = [p for p in posts if (p.get('cover_local_path') or p.get('attachment_local_path'))]
+    if not candidates:
+        raise HTTPException(404, '池里没有带封面的帖子，换不了')
 
-    url = ig.generate_processed(prompt, draft_id=f'{draft_id}_{index}_{uuid.uuid4().hex[:6]}')
-    if not url:
-        raise HTTPException(502, 'wan2.7 生图失败')
+    # 相关度排序：narration text 跟 cover_image_desc 的 2-gram 重叠数
+    narration = ((draft.get('title') or '') + '\n' + (draft.get('content') or '')).strip()
+    scored = [(p, _ngram_relevance(narration, p.get('cover_image_desc') or '')) for p in candidates]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top = [p for p, _s in scored[:5]]
+    # 当前正在显示这张图（如果碰巧在 top 5 里）排除
+    cur_url = imgs[index]
+    top = [p for p in top if _post_cover_url(p, config.get('mysql') or {}) != cur_url]
+    if not top:
+        # 退到全候选随机
+        top = [p for p in candidates if _post_cover_url(p, config.get('mysql') or {}) != cur_url]
+    if not top:
+        raise HTTPException(404, '没有合适的替换图（候选都跟当前一样）')
 
-    imgs[index] = url
+    picked = _random.choice(top)
+    new_url = _post_cover_url(picked, config.get('mysql') or {})
+    if not new_url:
+        raise HTTPException(502, '所选候选 cover_local_path 转 URL 失败')
+
+    imgs[index] = new_url
     db.update_draft_fields(draft_id, image_urls=_join_images(imgs))
-    log.info('[xhs] draft=%d image[%d] 重生 → %s', draft_id, index, url)
-    return {'ok': True, 'index': index, 'url': url, 'prompt': prompt}
+    score = next((s for p, s in scored if p['id'] == picked['id']), 0)
+    log.info(
+        '[xhs] draft=%d image[%d] 从 DB 换图 → post_id=%s desc=%r score=%d url=%s',
+        draft_id, index, picked.get('id'),
+        (picked.get('cover_image_desc') or '')[:30], score, new_url,
+    )
+    return {
+        'ok': True, 'index': index, 'url': new_url,
+        'from_post_id': picked.get('id'),
+        'relevance_score': score,
+        'desc': picked.get('cover_image_desc') or '',
+    }
