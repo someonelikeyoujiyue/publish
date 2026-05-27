@@ -89,6 +89,53 @@ def synthesize_batch(
     asyncio.run(_batch_async(items, voice_code, rate))
 
 
+# ── 静音模式（voice='none' / 空）──────────────────────────────────────────
+# 用户选「无配音」时：每段生一段对应时长的静音 mp3，让 Remotion 拿来当 scene 时长基准。
+# 时长 = max(MIN_SILENT_SEC, 字符数 / READ_CHAR_PER_SEC)。
+
+MIN_SILENT_SEC = 2.5          # 最短场景时长（让 BGM / Ken Burns 有发挥）
+READ_CHAR_PER_SEC = 5.0       # 人眼读字幕约 5 字/秒（用来估时长）
+
+SILENT_VOICE_KEYS = {'none', '', 'silent', 'mute'}
+
+
+def estimate_silent_duration(text: str) -> float:
+    """字幕字符数 → 应该展示几秒（无配音模式用）。"""
+    n = len(text or '')
+    return max(MIN_SILENT_SEC, n / READ_CHAR_PER_SEC)
+
+
+def synthesize_silence(items: Sequence[TTSItem]) -> None:
+    """给 voice='none' 的场景生静音 mp3，时长按 estimate_silent_duration 算。
+
+    用 ffmpeg lavfi anullsrc：
+      ffmpeg -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 \\
+             -t <sec> -acodec libmp3lame -b:a 64k -y <out>
+    """
+    if not items:
+        return
+    for i, it in enumerate(items, 1):
+        sec = round(estimate_silent_duration(it.text), 2)
+        log.info('[tts] [%d/%d] 静音 %ss → %s', i, len(items), sec, it.out_path)
+        cmd = [
+            'ffmpeg', '-hide_banner', '-loglevel', 'error',
+            '-f', 'lavfi',
+            '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+            '-t', str(sec),
+            '-acodec', 'libmp3lame', '-b:a', '64k',
+            '-y', str(it.out_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f'ffmpeg 生静音失败 returncode={proc.returncode}\nstderr: {proc.stderr[-300:]}'
+            )
+
+
+def is_silent(voice: str) -> bool:
+    return (voice or '').strip().lower() in SILENT_VOICE_KEYS
+
+
 def probe_duration_seconds(audio_path: Path) -> float:
     """用 ffprobe 量音频秒数。失败抛 RuntimeError。"""
     try:

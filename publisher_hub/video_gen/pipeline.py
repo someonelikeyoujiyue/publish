@@ -51,6 +51,9 @@ SCENE_TAIL_GAP = 0.4
 # 拉帖失败时的最终兜底（DB 空 / 用户没配 sources / 网络挂掉等罕见情况才会用）
 DEFAULT_TOPIC_FALLBACK = '兰实大学 4 年 30 万本科留学，对比日韩马新菲费用账本'
 
+# bgm_path 的特殊 sentinel：表示「用户明确不要 BGM」（区别于「没设置 → 走默认」）
+BGM_NONE_SENTINEL = '__NONE__'
+
 
 def _project_root() -> Path:
     """publisher-hub/ 绝对路径。"""
@@ -112,15 +115,20 @@ def _resolve_assets(
         log.info('[pipeline] 用户图 %d 张不够 %d，从默认库补 %d', len(images), n_needed, need)
         images.extend(_pick_default_images(need, defaults_dir))
 
-    # BGM：用户没指定 → 默认（如果默认目录里有 bgm-default.mp3）
+    # BGM：
+    #   bgm_path == BGM_NONE_SENTINEL  → 用户明确不要 BGM，bgm=None
+    #   bgm_path == ''/None            → 没设置，走默认 bgm-default.mp3
+    #   bgm_path == '/abs/path/x.mp3'  → 用户上传的，用这个
     bgm_final: Optional[Path] = None
-    if bgm_path:
+    if bgm_path == BGM_NONE_SENTINEL:
+        log.info('[pipeline] BGM: 用户明确不要')
+    elif bgm_path:
         p = Path(bgm_path)
         if p.exists():
             bgm_final = p
         else:
-            log.warning('[pipeline] 用户 bgm 不存在: %s', bgm_path)
-    if bgm_final is None:
+            log.warning('[pipeline] 用户 bgm 不存在: %s，回退默认', bgm_path)
+    if bgm_final is None and bgm_path != BGM_NONE_SENTINEL:
         cand = defaults_dir / 'bgm-default.mp3'
         if cand.exists():
             bgm_final = cand
@@ -236,18 +244,25 @@ class VideoGenPipeline:
                 f'image 数 {len(assets.images)} 与 narration 数 {len(narrations)} 不一致'
             )
 
-        # 3. TTS
+        # 3. TTS（或静音）
         tts_items: list[tts_mod.TTSItem] = []
         for i, n in enumerate(narrations, 1):
             tts_items.append(tts_mod.TTSItem(
                 text=n,
                 out_path=audio_dir / f'scene_{i:02d}.mp3',
             ))
-        log.info('[pipeline] TTS %d 段 voice=%s rate=%s', len(tts_items), voice, rate)
-        try:
-            tts_mod.synthesize_batch(tts_items, voice=voice, rate=rate)
-        except Exception as e:
-            raise VideoJobError(f'TTS 失败: {e}') from e
+        if tts_mod.is_silent(voice):
+            log.info('[pipeline] 无配音模式 → 生 %d 段静音 mp3', len(tts_items))
+            try:
+                tts_mod.synthesize_silence(tts_items)
+            except Exception as e:
+                raise VideoJobError(f'静音 mp3 生成失败: {e}') from e
+        else:
+            log.info('[pipeline] TTS %d 段 voice=%s rate=%s', len(tts_items), voice, rate)
+            try:
+                tts_mod.synthesize_batch(tts_items, voice=voice, rate=rate)
+            except Exception as e:
+                raise VideoJobError(f'TTS 失败: {e}') from e
 
         # 4. 量时长 + 写 input.json
         scenes = []

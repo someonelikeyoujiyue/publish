@@ -39,8 +39,16 @@ export function Video() {
   const [nScenes, setNScenes]       = useState(3)
   const [voice, setVoice]           = useState('zh-xiaoxiao-female')
   const [rate, setRate]             = useState('+5%')
+  const [bgmMode, setBgmMode]       = useState<'default' | 'upload' | 'none'>('default')
+  const [bgmFile, setBgmFile]       = useState<File | null>(null)
   const [images, setImages]         = useState<File[]>([])
   const [err, setErr]               = useState<string>('')
+  // preview 结果：跑过一次「✨ 生成文案预览图」后非空；提交视频后清空
+  const [preview, setPreview] = useState<{
+    narrations: string[]
+    image_urls: string[]
+    source: string
+  } | null>(null)
 
   // 选项 + 任务列表
   const { data: opts } = useQuery({
@@ -73,12 +81,38 @@ export function Video() {
         n_scenes: nScenes,
         voice,
         rate,
+        bgm_mode: bgmMode,
+        bgm_file: bgmMode === 'upload' ? bgmFile : null,
         images,
       }),
     onSuccess: () => {
       setTopic(''); setTitle(''); setNarrations(''); setImages([])
-      setErr('')
+      setBgmFile(null); setBgmMode('default')
+      setPreview(null); setErr('')
       qc.invalidateQueries({ queryKey: ['video-jobs', userId] })
+    },
+    onError: (e) => setErr((e as Error).message),
+  })
+
+  // 预览：跑 LLM 拿 narration + 默认图但不渲染
+  const previewMut = useMutation({
+    mutationFn: () =>
+      api.videoPreview(userId, {
+        topic: topic.trim(),
+        narrations: narrations,
+        n_scenes: nScenes,
+      }),
+    onSuccess: (data) => {
+      // 把 LLM 生的 narration 回填到 textarea（用户可以再改）
+      setNarrations(data.narrations.join('\n'))
+      if (data.title && !title.trim()) setTitle(data.title)
+      if (data.topic && !topic.trim()) setTopic(data.topic)
+      setPreview({
+        narrations: data.narrations,
+        image_urls: data.default_image_urls,
+        source: data.source,
+      })
+      setErr('')
     },
     onError: (e) => setErr((e as Error).message),
   })
@@ -88,27 +122,11 @@ export function Video() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['video-jobs', userId] }),
   })
 
-  // 提交前判断："什么都没填"要弹确认 modal；其它情况直接 mutate
-  const isEmpty = useMemo(() => {
-    const hasTopic = topic.trim().length > 0
-    const hasNarr = narrations.split('\n').filter((l) => l.trim()).length > 0
-    const hasImage = images.length > 0
-    return !hasTopic && !hasNarr && !hasImage
-  }, [topic, narrations, images])
-  const [defaultConfirmOpen, setDefaultConfirmOpen] = useState(false)
-
-  const handleSubmitClick = () => {
-    setErr('')
-    if (isEmpty) {
-      setDefaultConfirmOpen(true)   // 弹确认 → 用户点继续后才真正 mutate
-      return
-    }
-    submit.mutate()
-  }
-  const confirmDefaultAndSubmit = () => {
-    setDefaultConfirmOpen(false)
-    submit.mutate()
-  }
+  // 生成视频按钮：要求 narrations 或图片至少一个有内容（topic 不够，必须有最终文案）
+  // 用户必须先走「✨ 生成文案预览图」或者自己手填 narrations / 上传图片
+  const hasNarr = narrations.split('\n').filter((l) => l.trim()).length > 0
+  const canSubmit = !submit.isPending && (hasNarr || images.length > 0)
+  const canPreview = !previewMut.isPending && !submit.isPending
 
   if (isLoading) return <p className="text-slate-500">加载中…</p>
   const jobs = jobsResp?.jobs ?? []
@@ -175,7 +193,7 @@ export function Video() {
                 className={inputCls}
               />
             </Field>
-            <Field label="音色" hint="">
+            <Field label="音色" hint="选「无配音」= 只留 BGM">
               <select
                 value={voice}
                 onChange={(e) => setVoice(e.target.value)}
@@ -184,6 +202,7 @@ export function Video() {
                 {(opts?.voices ?? [{ key: 'zh-xiaoxiao-female', code: 'zh-CN-XiaoxiaoNeural' }]).map(v => (
                   <option key={v.key} value={v.key}>{v.key}</option>
                 ))}
+                <option value="none">🔇 无配音（按字数控时长）</option>
               </select>
             </Field>
             <Field label="语速 rate" hint="+5% / -10% / +0%">
@@ -199,21 +218,99 @@ export function Video() {
             <ImageDropzone images={images} setImages={setImages} />
           </Field>
 
-          {err && <Flash tone="error">提交失败：{err}</Flash>}
+          <Field label="🎵 背景音乐" hint="">
+            <div className="flex gap-3 items-center text-sm">
+              {(['default', 'upload', 'none'] as const).map(m => (
+                <label key={m} className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="bgm_mode"
+                    checked={bgmMode === m}
+                    onChange={() => setBgmMode(m)}
+                    className="accent-brand-600"
+                  />
+                  {m === 'default' && '默认 BGM'}
+                  {m === 'upload' && '上传 BGM'}
+                  {m === 'none' && '不要 BGM'}
+                </label>
+              ))}
+            </div>
+            {bgmMode === 'upload' && (
+              <div className="mt-2">
+                <input
+                  type="file"
+                  accept="audio/*"
+                  onChange={(e) => setBgmFile((e.target.files && e.target.files[0]) || null)}
+                  className="block text-sm"
+                />
+                {bgmFile && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    已选：{bgmFile.name}（{(bgmFile.size / 1024 / 1024).toFixed(2)} MB）
+                  </p>
+                )}
+              </div>
+            )}
+          </Field>
 
-          <div className="flex gap-2 pt-2">
+          {/* preview 结果展示 */}
+          {preview && (
+            <div className="border border-emerald-200 bg-emerald-50/40 rounded-lg p-3">
+              <div className="text-sm font-semibold text-emerald-800 mb-2">
+                ✨ 已生成预览（来源：{preview.source}）—— 可修改文案后再点「生成视频」
+              </div>
+              {preview.image_urls.length > 0 && (
+                <div>
+                  <div className="text-xs text-slate-600 mb-1.5">
+                    将使用的图片（如果你不另传，就用这些）：
+                  </div>
+                  <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                    {preview.image_urls.map((u, i) => (
+                      <div
+                        key={i}
+                        className="aspect-[9/16] rounded overflow-hidden border border-slate-200 bg-slate-100 relative"
+                      >
+                        <img src={u} alt="" className="w-full h-full object-cover" />
+                        <div className="absolute top-0.5 left-0.5 bg-black/60 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded">
+                          {i + 1}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {err && <Flash tone="error">{err}</Flash>}
+
+          <div className="flex gap-2 pt-2 flex-wrap">
             <Btn
-              onClick={handleSubmitClick}
+              variant="secondary"
+              onClick={() => previewMut.mutate()}
+              loading={previewMut.isPending}
+              disabled={!canPreview}
+            >
+              {previewMut.isPending ? 'LLM 生成中…（10-30s）' : '✨ 生成文案 + 预览图'}
+            </Btn>
+            <Btn
+              onClick={() => submit.mutate()}
               loading={submit.isPending}
-              disabled={submit.isPending}
+              disabled={!canSubmit}
+              title={!canSubmit ? '需要先有文案或上传图片（建议先点「生成文案+预览图」）' : ''}
             >
               {submit.isPending ? '提交中…' : '🚀 生成视频'}
             </Btn>
             <Btn variant="ghost" onClick={() => {
-              setTopic(''); setTitle(''); setNarrations(''); setImages([]); setErr('')
+              setTopic(''); setTitle(''); setNarrations(''); setImages([])
+              setBgmFile(null); setBgmMode('default'); setPreview(null); setErr('')
             }}>
               清空
             </Btn>
+            {!canSubmit && !submit.isPending && (
+              <p className="text-xs text-slate-500 self-center w-full">
+                💡 「生成视频」需要先有 narration 或上传图。可以手填，也可以点「生成文案+预览图」让 LLM 生。
+              </p>
+            )}
           </div>
         </fieldset>
       </div>
@@ -308,46 +405,6 @@ export function Video() {
         </div>
       )}
 
-      {/* "啥都不填"确认 modal */}
-      {defaultConfirmOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setDefaultConfirmOpen(false)}
-        >
-          <div
-            className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold mb-2">啥都没填，按默认流程生成？</h3>
-            <div className="text-sm text-slate-600 space-y-2 mb-5 leading-relaxed">
-              <p>
-                你没填话题、文案、也没上传图。后台会按这个流程跑：
-              </p>
-              <ul className="list-disc pl-5 text-slate-600 space-y-1">
-                <li>
-                  从 <b>数据库</b> 随机拉一条最近抓到的原帖（按你的 xhs.sources 过滤）
-                  当文案种子
-                </li>
-                <li>LLM 用 video_narration prompt 把帖子改写成 3 段旁白</li>
-                <li>图片统一用 <b>默认 RSU 校园图</b>（原帖封面 CDN 不稳定，不用）</li>
-                <li>edge-tts 配音 → Remotion 渲染 1080×1920 mp4</li>
-              </ul>
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                ⚠️ 数据库帖池空 / sources 没配 时会回退到一个写死的兜底话题
-              </p>
-            </div>
-
-            <div className="flex gap-2 justify-end">
-              <Btn variant="secondary" onClick={() => setDefaultConfirmOpen(false)}>
-                我去填一下
-              </Btn>
-              <Btn onClick={confirmDefaultAndSubmit}>
-                就按默认跑
-              </Btn>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }

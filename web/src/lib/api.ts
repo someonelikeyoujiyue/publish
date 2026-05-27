@@ -173,7 +173,23 @@ export const api = {
       voices: { key: string; code: string }[]
       default_voice: string
       default_rate: string
+      silent_voice: string
     }>('/video/options'),
+
+  videoPreview: (
+    userId: string,
+    body: { topic: string; narrations: string; n_scenes: number },
+  ) =>
+    req<{
+      topic: string
+      title: string
+      narrations: string[]
+      default_image_urls: string[]
+      source: 'user_narrations' | 'user_topic' | 'db_seed' | 'fallback'
+    }>(`/users/${userId}/video/preview`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   videoJobs: (userId: string) =>
     req<{ jobs: VideoJob[] }>(`/users/${userId}/video/jobs`),
@@ -190,6 +206,8 @@ export const api = {
       n_scenes?: number
       voice?: string
       rate?: string
+      bgm_mode?: 'default' | 'upload' | 'none'
+      bgm_file?: File | null
       images?: File[]
     },
   ): Promise<{ ok: boolean; job_id: number; status: string }> => {
@@ -200,6 +218,8 @@ export const api = {
     fd.append('n_scenes',   String(form.n_scenes ?? 3))
     fd.append('voice',      form.voice ?? 'zh-xiaoxiao-female')
     fd.append('rate',       form.rate ?? '+5%')
+    fd.append('bgm_mode',   form.bgm_mode ?? 'default')
+    if (form.bgm_file) fd.append('bgm', form.bgm_file)
     for (const f of form.images ?? []) {
       fd.append('images', f)
     }
