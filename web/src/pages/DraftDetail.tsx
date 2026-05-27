@@ -6,6 +6,7 @@ import { canWrite } from '@/lib/auth'
 import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
 import { WechatBindModal } from '@/components/WechatBindModal'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 const PLATFORM_LABEL = { wechat: '公众号', xhs: '小红书', toutiao: '微头条', douyin: '抖音图文', youtube: 'YouTube' } as const
 
@@ -31,6 +32,12 @@ export function DraftDetail({ platform }: { platform: Platform }) {
   const [editContent, setEditContent] = useState('')
   const uploadRef = useRef<HTMLInputElement | null>(null)
   const [editErr, setEditErr] = useState('')
+  // 单一确认 modal：当前要确认的动作
+  const [confirming, setConfirming] = useState<
+    | { kind: 'del-image'; index: number }
+    | { kind: 'toutiao-publish' }
+    | null
+  >(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['draft', userId, platform, id],
@@ -268,21 +275,15 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                       {platform === 'xhs' && editor && (
                         <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition">
                           <button
-                            onClick={() => {
-                              if (confirm(`确认用 AI 重新生成第 ${i + 1} 张图？大约 30s`)) {
-                                regenImage.mutate(i)
-                              }
-                            }}
+                            onClick={() => regenImage.mutate(i)}
                             disabled={regenImage.isPending}
                             className="bg-amber-500 hover:bg-amber-600 text-white w-6 h-6 rounded text-xs font-bold disabled:opacity-50"
-                            title="AI 重生这张"
+                            title="从素材库换一张相关图"
                           >
                             🔄
                           </button>
                           <button
-                            onClick={() => {
-                              if (confirm(`确认删除第 ${i + 1} 张图？`)) delImage.mutate(i)
-                            }}
+                            onClick={() => setConfirming({ kind: 'del-image', index: i })}
                             disabled={delImage.isPending}
                             className="bg-red-600 hover:bg-red-700 text-white w-6 h-6 rounded text-xs font-bold disabled:opacity-50"
                             title="删除这张"
@@ -375,9 +376,7 @@ export function DraftDetail({ platform }: { platform: Platform }) {
                       <div className="space-y-1.5">
                         <Btn
                           className="w-full justify-center"
-                          onClick={() => {
-                            if (confirm('确认直接发布到头条号？发布后无法撤回。')) push.mutate()
-                          }}
+                          onClick={() => setConfirming({ kind: 'toutiao-publish' })}
                           loading={push.isPending}
                         >
                           {push.isPending ? '发布中…（约 30s）' : '🚀 立即发布'}
@@ -480,6 +479,38 @@ export function DraftDetail({ platform }: { platform: Platform }) {
           }}
         />
       )}
+
+      {/* 通用确认 modal（替代 native confirm()） */}
+      <ConfirmDialog
+        open={confirming?.kind === 'del-image'}
+        title="删除这张图？"
+        message={
+          <>
+            将删除第 <b>{confirming?.kind === 'del-image' ? confirming.index + 1 : '?'}</b> 张图。
+            <br />
+            如果是你自己上传的图，磁盘文件也会一起删；删后无法恢复。
+          </>
+        }
+        tone="danger"
+        confirmText="删除"
+        loading={delImage.isPending}
+        onConfirm={() => {
+          if (confirming?.kind === 'del-image') {
+            delImage.mutate(confirming.index, { onSettled: () => setConfirming(null) })
+          }
+        }}
+        onCancel={() => setConfirming(null)}
+      />
+      <ConfirmDialog
+        open={confirming?.kind === 'toutiao-publish'}
+        title="确认发布到头条号？"
+        message="点确认后会立即调用浏览器自动发布。发布后无法撤回。"
+        tone="danger"
+        confirmText="立即发布"
+        loading={push.isPending}
+        onConfirm={() => { push.mutate(); setConfirming(null) }}
+        onCancel={() => setConfirming(null)}
+      />
     </>
   )
 }

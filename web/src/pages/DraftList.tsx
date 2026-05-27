@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { canWrite, isAdmin } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { Platform, DraftStatus } from '@/lib/types'
 
 const STATUS_LABEL: Record<DraftStatus, { text: string; kind: 'ready' | 'pushed' | 'failed' }> = {
@@ -20,6 +22,7 @@ export function DraftList({ platform }: { platform: Platform }) {
   const canRewrite = canWrite()
   // 删除（目前只 xhs 平台支持，admin only）
   const canDelete = platform === 'xhs' && isAdmin()
+  const [confirmDel, setConfirmDel] = useState<{ id: number; title: string } | null>(null)
   const delMut = useMutation({
     mutationFn: (draftId: number) => api.xhsDeleteDraft(userId, draftId),
     onSuccess: () => {
@@ -105,11 +108,7 @@ export function DraftList({ platform }: { platform: Platform }) {
                   </Link>
                   {canDelete && (
                     <button
-                      onClick={() => {
-                        if (confirm(`确认删除草稿 #${d.id}「${d.title?.slice(0, 20) || '(无标题)'}」？`)) {
-                          delMut.mutate(d.id)
-                        }
-                      }}
+                      onClick={() => setConfirmDel({ id: d.id, title: d.title || '(无标题)' })}
                       disabled={delMut.isPending && delMut.variables === d.id}
                       className="px-3 py-1.5 text-sm text-red-700 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
                       title="删除（仅 admin）"
@@ -123,6 +122,29 @@ export function DraftList({ platform }: { platform: Platform }) {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmDel}
+        title="删除这条草稿？"
+        message={
+          confirmDel && (
+            <>
+              将删除草稿 <b>#{confirmDel.id}</b>「{confirmDel.title.slice(0, 30)}」。
+              <br />
+              草稿、已上传图片、关联文件都会一起清掉，无法撤销。
+            </>
+          )
+        }
+        tone="danger"
+        confirmText="删除"
+        loading={delMut.isPending}
+        onConfirm={() => {
+          if (confirmDel) {
+            delMut.mutate(confirmDel.id, { onSettled: () => setConfirmDel(null) })
+          }
+        }}
+        onCancel={() => setConfirmDel(null)}
+      />
     </>
   )
 }
