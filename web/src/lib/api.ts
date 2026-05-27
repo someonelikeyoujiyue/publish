@@ -105,6 +105,55 @@ export const api = {
     return body as { ok: boolean; media_id?: string; qr_url?: string; error?: string; final_url?: string; mode?: string }
   },
 
+  // xhs draft 编辑 / 重生 / 图片管理
+  xhsDeleteDraft: (userId: string, draftId: number) =>
+    req<{ ok: boolean; draft_id: number; rows_deleted: number }>(
+      `/users/${userId}/xhs/drafts/${draftId}`,
+      { method: 'DELETE' },
+    ),
+  xhsUpdateDraft: (userId: string, draftId: number, body: { title?: string; content?: string }) =>
+    req<{ ok: boolean }>(`/users/${userId}/xhs/drafts/${draftId}`, {
+      method: 'PATCH', body: JSON.stringify(body),
+    }),
+  xhsRegenNarration: (userId: string, draftId: number) =>
+    req<{ ok: boolean; title: string; content: string }>(
+      `/users/${userId}/xhs/drafts/${draftId}/regenerate-narration`,
+      { method: 'POST', body: '{}' },
+    ),
+  xhsDeleteImage: (userId: string, draftId: number, index: number) =>
+    req<{ ok: boolean; remaining: number; removed_url: string }>(
+      `/users/${userId}/xhs/drafts/${draftId}/images/${index}`,
+      { method: 'DELETE' },
+    ),
+  xhsRegenImage: (userId: string, draftId: number, index: number, prompt?: string) =>
+    req<{ ok: boolean; index: number; url: string; prompt: string }>(
+      `/users/${userId}/xhs/drafts/${draftId}/images/${index}/regenerate`,
+      { method: 'POST', body: JSON.stringify({ prompt: prompt ?? null }) },
+    ),
+  xhsUploadImages: async (
+    userId: string, draftId: number, files: File[],
+  ): Promise<{ ok: boolean; added: string[]; total: number }> => {
+    const fd = new FormData()
+    for (const f of files) fd.append('images', f)
+    const headers: Record<string, string> = {}
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${BASE}/users/${userId}/xhs/drafts/${draftId}/images`, {
+      method: 'POST', headers, body: fd,
+    })
+    if (res.status === 401) {
+      clearSession()
+      if (!location.pathname.startsWith('/login')) location.href = '/login?reason=expired'
+      throw new Error('登录已过期')
+    }
+    if (!res.ok) {
+      const t = await res.text(); let m = t
+      try { m = JSON.parse(t).detail || t } catch { /* not json */ }
+      throw new Error(`HTTP ${res.status}: ${m}`)
+    }
+    return res.json()
+  },
+
   // toutiao
   toutiaoStatus: (userId: string) =>
     req<ToutiaoStatus>(`/users/${userId}/toutiao/status`),

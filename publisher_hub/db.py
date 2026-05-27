@@ -386,6 +386,45 @@ class Database:
             log.warning('[db] delete_draft 失败: %s', e)
             return 0
 
+    def update_draft_fields(self, draft_id: int, **fields) -> int:
+        """部分更新 hub_drafts 行。允许字段白名单。返回受影响行数。"""
+        ALLOWED = {'title', 'content', 'image_urls', 'status', 'error_msg', 'source_url'}
+        sets, params = [], []
+        for k, v in fields.items():
+            if k in ALLOWED:
+                sets.append(f'{k}=%s')
+                params.append(v)
+            else:
+                log.warning('[db] update_draft_fields 忽略未知字段: %s', k)
+        if not sets:
+            return 0
+        params.append(draft_id)
+        sql = f'UPDATE hub_drafts SET {", ".join(sets)} WHERE id=%s'
+        try:
+            with self._cur() as cur:
+                cur.execute(sql, params)
+                return cur.rowcount
+        except Exception as e:
+            log.warning('[db] update_draft_fields 失败: %s', e)
+            return 0
+
+    def get_post(self, post_id: int) -> dict | None:
+        """读 newmedia.posts 一条（重生 narration 需要原帖内容）。"""
+        try:
+            with self._cur() as cur:
+                cur.execute(
+                    """SELECT id, platform, post_id, nickname, category,
+                              title, content, translated_title, translated_content,
+                              cover_url, cover_local_path, attachment_local_path,
+                              cover_image_desc, discovered_at, published_at
+                       FROM posts WHERE id=%s""",
+                    (post_id,),
+                )
+                return cur.fetchone()
+        except Exception as e:
+            log.warning('[db] get_post 失败: %s', e)
+            return None
+
     # ── hub_video_jobs 操作（短视频生成）────────────────────────────────
 
     def create_video_job(

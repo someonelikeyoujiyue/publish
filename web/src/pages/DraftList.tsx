@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { canWrite } from '@/lib/auth'
+import { canWrite, isAdmin } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
 import type { Platform, DraftStatus } from '@/lib/types'
 
@@ -18,6 +18,15 @@ export function DraftList({ platform }: { platform: Platform }) {
   const qc = useQueryClient()
   // 仿写按钮对 admin + editor 都可见；user 只读
   const canRewrite = canWrite()
+  // 删除（目前只 xhs 平台支持，admin only）
+  const canDelete = platform === 'xhs' && isAdmin()
+  const delMut = useMutation({
+    mutationFn: (draftId: number) => api.xhsDeleteDraft(userId, draftId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['drafts', userId, platform] })
+      qc.invalidateQueries({ queryKey: ['users'] })
+    },
+  })
 
   const { data, isLoading } = useQuery({
     queryKey: ['drafts', userId, platform],
@@ -94,6 +103,20 @@ export function DraftList({ platform }: { platform: Platform }) {
                   <Link to={`/${userId}/${platform}/${d.id}`} className="flex-1 text-center py-1.5 text-sm bg-brand-50 text-brand-700 rounded hover:bg-brand-100">
                     查看 →
                   </Link>
+                  {canDelete && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`确认删除草稿 #${d.id}「${d.title?.slice(0, 20) || '(无标题)'}」？`)) {
+                          delMut.mutate(d.id)
+                        }
+                      }}
+                      disabled={delMut.isPending && delMut.variables === d.id}
+                      className="px-3 py-1.5 text-sm text-red-700 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                      title="删除（仅 admin）"
+                    >
+                      🗑
+                    </button>
+                  )}
                 </div>
               </Card>
             )

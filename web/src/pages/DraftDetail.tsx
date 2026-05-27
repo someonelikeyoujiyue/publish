@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { canWrite } from '@/lib/auth'
 import { Btn, Badge, Flash } from '@/components/ui'
 import type { Platform } from '@/lib/types'
 import { WechatBindModal } from '@/components/WechatBindModal'
@@ -22,6 +23,14 @@ export function DraftDetail({ platform }: { platform: Platform }) {
   const [copied, setCopied] = useState<'' | 'all' | 'title' | 'body'>('')
   // 公众号未绑 AppID/Secret 时弹绑定 modal
   const [bindOpen, setBindOpen] = useState(false)
+
+  // ── xhs 专属：编辑文案 / 图片增删 / 重生 ──
+  const editor = canWrite()
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const [editContent, setEditContent] = useState('')
+  const uploadRef = useRef<HTMLInputElement | null>(null)
+  const [editErr, setEditErr] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['draft', userId, platform, id],
@@ -49,6 +58,67 @@ export function DraftDetail({ platform }: { platform: Platform }) {
       qc.invalidateQueries({ queryKey: ['drafts', userId, platform] })
     },
   })
+
+  // xhs 编辑 mutation 簇
+  const invalidateDraft = () => {
+    qc.invalidateQueries({ queryKey: ['draft', userId, platform, id] })
+    qc.invalidateQueries({ queryKey: ['drafts', userId, platform] })
+  }
+  const onMutationError = (e: unknown) => setEditErr((e as Error).message)
+
+  const saveEdit = useMutation({
+    mutationFn: () => api.xhsUpdateDraft(userId, id, {
+      title: editTitle, content: editContent,
+    }),
+    onSuccess: () => { setEditing(false); setEditErr(''); invalidateDraft() },
+    onError: onMutationError,
+  })
+
+  const regenNarration = useMutation({
+    mutationFn: () => api.xhsRegenNarration(userId, id),
+    onSuccess: (resp) => {
+      setEditTitle(resp.title || '')
+      setEditContent(resp.content || '')
+      setEditing(true)   // 直接进编辑态，让用户决定保不保留 LLM 新文案
+      setEditErr('')
+      invalidateDraft()
+    },
+    onError: onMutationError,
+  })
+
+  const delImage = useMutation({
+    mutationFn: (index: number) => api.xhsDeleteImage(userId, id, index),
+    onSuccess: () => { setEditErr(''); invalidateDraft() },
+    onError: onMutationError,
+  })
+
+  const uploadImages = useMutation({
+    mutationFn: (files: File[]) => api.xhsUploadImages(userId, id, files),
+    onSuccess: () => { setEditErr(''); invalidateDraft() },
+    onError: onMutationError,
+  })
+
+  const regenImage = useMutation({
+    mutationFn: (index: number) => api.xhsRegenImage(userId, id, index),
+    onSuccess: () => { setEditErr(''); invalidateDraft() },
+    onError: onMutationError,
+  })
+
+  // 进入编辑态时填入当前文案
+  const enterEdit = () => {
+    if (!data) return
+    setEditTitle(data.title || '')
+    setEditContent(data.content || '')
+    setEditErr('')
+    setEditing(true)
+  }
+  // 数据刷新时如果在编辑态但 mutation 还没改完，避免被新数据覆盖；用户主动 enter/cancel 才同步
+  useEffect(() => {
+    if (!editing && data) {
+      setEditTitle(data.title || '')
+      setEditContent(data.content || '')
+    }
+  }, [data, editing])
 
   const saveDraftOnly = useMutation({
     mutationFn: () => api.push(userId, platform, id, { draft_only: true }),
@@ -110,6 +180,58 @@ export function DraftDetail({ platform }: { platform: Platform }) {
               className="prose-pub text-[16px] leading-[1.85]"
               dangerouslySetInnerHTML={{ __html: data.content_html || '' }}
             />
+          ) : platform === 'xhs' ? (
+            <>
+              {/* xhs 编辑工具栏 */}
+              {editor && (
+                <div className="flex gap-2 mb-3 flex-wrap">
+                  {!editing ? (
+                    <>
+                      <Btn variant="secondary" onClick={enterEdit}>✏️ 编辑文案</Btn>
+                      <Btn
+                        variant="secondary"
+                        onClick={() => regenNarration.mutate()}
+                        loading={regenNarration.isPending}
+                      >
+                        {regenNarration.isPending ? 'LLM 生成中…' : '🔄 重新生成文案'}
+                      </Btn>
+                    </>
+                  ) : (
+                    <>
+                      <Btn onClick={() => saveEdit.mutate()} loading={saveEdit.isPending}>
+                        {saveEdit.isPending ? '保存中…' : '💾 保存'}
+                      </Btn>
+                      <Btn variant="secondary" onClick={() => { setEditing(false); setEditErr('') }}>
+                        ✗ 取消
+                      </Btn>
+                    </>
+                  )}
+                </div>
+              )}
+              {editErr && <Flash tone="error">{editErr}</Flash>}
+
+              {editing ? (
+                <div className="space-y-2">
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="标题"
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-base font-semibold focus:outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-50"
+                  />
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    placeholder="正文（保留原格式，标签 #xxx 也可以保留）"
+                    rows={14}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-[15px] leading-[1.85] font-sans focus:outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-50"
+                  />
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap font-sans text-[15px] leading-[1.85] text-slate-800">
+                  {data.content}
+                </pre>
+              )}
+            </>
           ) : (
             <pre className="whitespace-pre-wrap font-sans text-[15px] leading-[1.85] text-slate-800">
               {data.content}
@@ -119,18 +241,77 @@ export function DraftDetail({ platform }: { platform: Platform }) {
 
         {/* Sidebar */}
         <aside className="space-y-5">
-          {data.images.length > 0 && (
+          {(data.images.length > 0 || platform === 'xhs') && (
             <div className="bg-white rounded-lg border border-slate-200 p-5">
-              <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-3 font-medium">
-                {data.images.length} 张图
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {data.images.map((src, i) => (
-                  <button key={i} onClick={() => setLightbox(src)}>
-                    <img src={src} className="w-full aspect-square object-cover rounded bg-slate-100 hover:opacity-80 transition" alt="" />
+              <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-3 font-medium flex justify-between items-center">
+                <span>{data.images.length} 张图</span>
+                {platform === 'xhs' && editor && (
+                  <button
+                    onClick={() => uploadRef.current?.click()}
+                    disabled={uploadImages.isPending}
+                    className="text-brand-700 hover:underline normal-case tracking-normal text-xs disabled:opacity-50"
+                  >
+                    {uploadImages.isPending ? '上传中…' : '+ 上传图片'}
                   </button>
-                ))}
+                )}
               </div>
+              {data.images.length > 0 ? (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {data.images.map((src, i) => (
+                    <div key={i} className="relative group">
+                      <button onClick={() => setLightbox(src)} className="block w-full">
+                        <img src={src} className="w-full aspect-square object-cover rounded bg-slate-100 hover:opacity-80 transition" alt="" />
+                      </button>
+                      <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded">
+                        {i + 1}
+                      </div>
+                      {platform === 'xhs' && editor && (
+                        <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                          <button
+                            onClick={() => {
+                              if (confirm(`确认用 AI 重新生成第 ${i + 1} 张图？大约 30s`)) {
+                                regenImage.mutate(i)
+                              }
+                            }}
+                            disabled={regenImage.isPending}
+                            className="bg-amber-500 hover:bg-amber-600 text-white w-6 h-6 rounded text-xs font-bold disabled:opacity-50"
+                            title="AI 重生这张"
+                          >
+                            🔄
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`确认删除第 ${i + 1} 张图？`)) delImage.mutate(i)
+                            }}
+                            disabled={delImage.isPending}
+                            className="bg-red-600 hover:bg-red-700 text-white w-6 h-6 rounded text-xs font-bold disabled:opacity-50"
+                            title="删除这张"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">还没图，点上方「+ 上传图片」加</p>
+              )}
+
+              {platform === 'xhs' && editor && (
+                <input
+                  ref={uploadRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    const fs = Array.from(e.target.files || [])
+                    if (fs.length) uploadImages.mutate(fs)
+                    if (uploadRef.current) uploadRef.current.value = ''
+                  }}
+                  className="hidden"
+                />
+              )}
             </div>
           )}
 
