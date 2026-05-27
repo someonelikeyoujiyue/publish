@@ -12,7 +12,7 @@
  *
  * 任务列表轮询：active 时（pending/processing）5s 刷一次。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -88,11 +88,27 @@ export function Video() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['video-jobs', userId] }),
   })
 
-  const canSubmit = useMemo(() => {
+  // 提交前判断："什么都没填"要弹确认 modal；其它情况直接 mutate
+  const isEmpty = useMemo(() => {
     const hasTopic = topic.trim().length > 0
     const hasNarr = narrations.split('\n').filter((l) => l.trim()).length > 0
-    return (hasTopic || hasNarr) && !submit.isPending
-  }, [topic, narrations, submit.isPending])
+    const hasImage = images.length > 0
+    return !hasTopic && !hasNarr && !hasImage
+  }, [topic, narrations, images])
+  const [defaultConfirmOpen, setDefaultConfirmOpen] = useState(false)
+
+  const handleSubmitClick = () => {
+    setErr('')
+    if (isEmpty) {
+      setDefaultConfirmOpen(true)   // 弹确认 → 用户点继续后才真正 mutate
+      return
+    }
+    submit.mutate()
+  }
+  const confirmDefaultAndSubmit = () => {
+    setDefaultConfirmOpen(false)
+    submit.mutate()
+  }
 
   if (isLoading) return <p className="text-slate-500">加载中…</p>
   const jobs = jobsResp?.jobs ?? []
@@ -176,26 +192,17 @@ export function Video() {
             </Field>
           </div>
 
-          <Field label="图片" hint="0-N 张；留空 = 用默认 RSU 校园图凑数">
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={(e) => setImages(Array.from(e.target.files || []))}
-              className="block text-sm"
-            />
-            {images.length > 0 && (
-              <p className="text-xs text-slate-500 mt-1">已选 {images.length} 张</p>
-            )}
+          <Field label="🖼️ 上传图片" hint="0-N 张；留空 = 用默认 RSU 校园图凑数">
+            <ImageDropzone images={images} setImages={setImages} />
           </Field>
 
           {err && <Flash tone="error">提交失败：{err}</Flash>}
 
           <div className="flex gap-2 pt-2">
             <Btn
-              onClick={() => submit.mutate()}
+              onClick={handleSubmitClick}
               loading={submit.isPending}
-              disabled={!canSubmit}
+              disabled={submit.isPending}
             >
               {submit.isPending ? '提交中…' : '🚀 生成视频'}
             </Btn>
@@ -297,6 +304,47 @@ export function Video() {
           })}
         </div>
       )}
+
+      {/* "啥都不填"确认 modal */}
+      {defaultConfirmOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => setDefaultConfirmOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold mb-2">啥都没填，按默认流程生成？</h3>
+            <div className="text-sm text-slate-600 space-y-2 mb-5 leading-relaxed">
+              <p>
+                你没填话题、文案、也没上传图。后台会按这个流程跑：
+              </p>
+              <ul className="list-disc pl-5 text-slate-600 space-y-1">
+                <li>
+                  从 <b>数据库</b> 随机拉一条最近抓到的原帖（按你的 xhs.sources 过滤）
+                  当种子
+                </li>
+                <li>LLM 用 video_narration prompt 把帖子改写成 3 段旁白</li>
+                <li>原帖封面 + 默认 RSU 校园图凑 3 张</li>
+                <li>edge-tts 配音 → Remotion 渲染 1080×1920 mp4</li>
+              </ul>
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ 数据库帖池空 / sources 没配 时会回退到一个写死的兜底话题
+              </p>
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <Btn variant="secondary" onClick={() => setDefaultConfirmOpen(false)}>
+                我去填一下
+              </Btn>
+              <Btn onClick={confirmDefaultAndSubmit}>
+                就按默认跑
+              </Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -309,6 +357,115 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
         {hint && <span className="text-xs text-slate-400">{hint}</span>}
       </label>
       {children}
+    </div>
+  )
+}
+
+/** 拖拽 + 点击的图片上传区，带缩略图预览 + 单张删除。 */
+function ImageDropzone({ images, setImages }: { images: File[]; setImages: (fs: File[]) => void }) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+
+  // 给每张图算一个对象 URL 做预览。images 变了重建（旧 URL revoke 防内存泄漏）。
+  const previews = useMemo(() => images.map((f) => URL.createObjectURL(f)), [images])
+  useEffect(() => {
+    return () => previews.forEach((u) => URL.revokeObjectURL(u))
+  }, [previews])
+
+  const addFiles = (incoming: File[]) => {
+    const imgs = incoming.filter((f) => f.type.startsWith('image/'))
+    if (imgs.length === 0) return
+    setImages([...images, ...imgs])
+  }
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    addFiles(Array.from(e.dataTransfer.files || []))
+  }
+
+  const removeAt = (i: number) => {
+    setImages(images.filter((_, idx) => idx !== i))
+  }
+
+  return (
+    <div>
+      {/* 隐藏 input，点 zone 触发 */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        onChange={(e) => {
+          addFiles(Array.from(e.target.files || []))
+          // reset 让同一文件能重选
+          if (inputRef.current) inputRef.current.value = ''
+        }}
+        className="hidden"
+      />
+
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={onDrop}
+        className={`
+          relative cursor-pointer rounded-lg border-2 border-dashed
+          px-6 py-8 text-center transition select-none
+          ${isDragging
+            ? 'border-brand-600 bg-brand-50'
+            : 'border-slate-300 bg-slate-50 hover:border-brand-500 hover:bg-brand-50/40'}
+        `}
+      >
+        <div className="text-4xl mb-2">📸</div>
+        <div className="text-base font-semibold text-slate-700 mb-1">
+          {isDragging ? '松开鼠标添加图片' : '点击或拖拽图片到这里'}
+        </div>
+        <div className="text-xs text-slate-500">
+          支持 JPG / PNG / WebP；多选；空着也能跑（自动用默认 RSU 校园图）
+        </div>
+        {images.length > 0 && (
+          <div className="absolute top-3 right-3 bg-brand-600 text-white text-xs font-semibold rounded-full px-2.5 py-1">
+            已选 {images.length} 张
+          </div>
+        )}
+      </div>
+
+      {/* 缩略图网格 */}
+      {images.length > 0 && (
+        <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 mt-3">
+          {previews.map((url, i) => (
+            <div
+              key={i}
+              className="relative group aspect-[9/16] rounded overflow-hidden border border-slate-200 bg-slate-100"
+            >
+              <img src={url} alt="" className="w-full h-full object-cover" />
+              <div className="absolute top-0.5 left-0.5 bg-black/60 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded">
+                {i + 1}
+              </div>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); removeAt(i) }}
+                className="absolute top-0.5 right-0.5 bg-red-600 hover:bg-red-700 text-white w-5 h-5 rounded-full text-xs leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                title="移除"
+              >
+                ×
+              </button>
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white text-[10px] px-1.5 py-1 truncate">
+                {images[i].name}
+              </div>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="aspect-[9/16] rounded border-2 border-dashed border-slate-300 hover:border-brand-500 hover:bg-brand-50/40 flex flex-col items-center justify-center text-slate-400 hover:text-brand-600 transition"
+          >
+            <span className="text-2xl mb-0.5">+</span>
+            <span className="text-[10px]">继续添加</span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }

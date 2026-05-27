@@ -129,8 +129,7 @@ async def generate_video(
 
     # 解析 narrations：按换行切，去空行
     narration_lines = [l.strip() for l in (narrations or '').splitlines() if l.strip()]
-    if not narration_lines and not (topic or '').strip():
-        raise HTTPException(400, 'topic 和 narrations 至少要给一个')
+    # 都空也允许：pipeline 内部会从默认话题列表挑一个跑（前端提交前已弹确认）
 
     # 1. 先插 DB 拿 job_id
     job_id = db.create_video_job(

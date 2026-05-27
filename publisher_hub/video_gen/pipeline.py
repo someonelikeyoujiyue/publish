@@ -26,6 +26,8 @@ from typing import Optional
 from . import narration as narration_mod
 from . import remotion as remotion_mod
 from . import tts as tts_mod
+from . import seed_post as seed_post_mod
+from ..config import get_user as get_publisher_user
 
 log = logging.getLogger('publisher_hub.video_gen.pipeline')
 
@@ -45,6 +47,9 @@ DEFAULT_HEIGHT = 1920
 DEFAULT_FPS = 30
 # scene 末尾留白（秒），避免字幕跟下一段硬切
 SCENE_TAIL_GAP = 0.4
+
+# 拉帖失败时的最终兜底（DB 空 / 用户没配 sources / 网络挂掉等罕见情况才会用）
+DEFAULT_TOPIC_FALLBACK = '兰实大学 4 年 30 万本科留学，对比日韩马新菲费用账本'
 
 
 def _project_root() -> Path:
@@ -192,7 +197,22 @@ class VideoGenPipeline:
             log.info('[pipeline] 用户提供 narrations %d 段，跳过 LLM', len(narrations))
         else:
             if not topic:
-                raise VideoJobError('既没提供 narrations 也没 topic，没法生文案')
+                # 用户什么都没填：从 newmedia.posts 拉一条原帖当种子（类似 cron 仿写）
+                user_cfg = get_publisher_user(self.config, job['user_id']) or {}
+                seed_topic, seed_img = seed_post_mod.fetch_seed_post(
+                    user_id=job['user_id'], user=user_cfg, db=db,
+                    config=self.config, image_dir=job_dir / 'images',
+                )
+                if seed_topic:
+                    topic = seed_topic
+                    log.info('[pipeline] 用 DB 种子帖 → topic=%r (%d 字)', topic[:40], len(topic))
+                    if seed_img:
+                        user_images = list(user_images) + [str(seed_img.resolve())]
+                        db.update_video_job(job_id, image_paths=user_images)
+                else:
+                    topic = DEFAULT_TOPIC_FALLBACK
+                    log.info('[pipeline] DB 无可用帖，回退兜底话题: %s', topic)
+                db.update_video_job(job_id, topic=topic)
             n_scenes = int(job.get('n_scenes') or DEFAULT_N_SCENES)
             n_scenes = max(2, min(6, n_scenes))  # 钳制范围
             result = narration_mod.generate(
