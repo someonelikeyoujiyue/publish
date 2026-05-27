@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from ...config import get_user
 from ...feishu import FeishuBot
 from ...rewrite import RewriteEngine
+from ... import rsu_facts
 from ...xhs import XhsPublisher
 from ._helpers import parse_images
 from .auth import require_admin, require_editor
@@ -207,12 +208,26 @@ def regenerate_narration(
 
     title   = (post.get('translated_title')   or post.get('title')   or '').strip()
     content = (post.get('translated_content') or post.get('content') or '').strip()
+
+    engine = RewriteEngine(config, prompts)
+    # 拉近 30 天 + 当前 draft 自己（避免重生跟旧标题撞，包括自己）
+    rt_block = engine._recent_titles_block(db, user_id, PLATFORM, days=30)
+    cur_title = (draft.get('title') or '').strip()
+    if cur_title and cur_title not in (rt_block or ''):
+        rt_block = (rt_block + '\n' if rt_block else '') + f'- {cur_title}'
+
+    facts_text, angle = rsu_facts.draw_seed()
     try:
-        prompt = tmpl.format(title=title, content=content[:4000])
+        prompt = tmpl.format(
+            title=title,
+            content=content[:4000],
+            seed_facts=facts_text,
+            seed_angle=angle,
+            recent_titles=rt_block or '(暂无)',
+        )
     except KeyError as e:
         raise HTTPException(500, f'xhs_note 模板缺占位符: {e}')
 
-    engine = RewriteEngine(config, prompts)
     text = engine._call_llm(prompt)
     if not text:
         raise HTTPException(502, 'LLM 返回空')

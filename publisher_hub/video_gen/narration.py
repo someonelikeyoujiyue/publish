@@ -116,7 +116,15 @@ def generate(
     if not tmpl:
         raise RuntimeError('prompts.yaml 缺 video_narration 模板')
 
-    prompt = tmpl.format(topic=topic.strip(), n_scenes=n_scenes)
+    # 每次随机抽 facts_subset + seed_angle，注入 prompt 反同质化
+    from .. import rsu_facts
+    facts_text, angle = rsu_facts.draw_seed()
+    prompt = tmpl.format(
+        topic=topic.strip(),
+        n_scenes=n_scenes,
+        seed_facts=facts_text,
+        seed_angle=angle,
+    )
 
     log.info('[narration] LLM 生成中  n_scenes=%d  topic=%r', n_scenes, topic[:40])
     raw = _stream_llm(prompt, config['llm'])

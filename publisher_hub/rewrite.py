@@ -25,6 +25,7 @@ from .config import get_user, load_config, load_prompts
 from .db import Database
 from .image_gen import ImageGenerator
 from .rsu import DEFAULT_BASE_URL as RSU_DEFAULT_URL, pick_random as rsu_pick_random
+from . import rsu_facts
 
 
 # 按平台限制写入草稿的图片数（None = 不限）
@@ -120,6 +121,10 @@ class RewriteEngine:
     # ── 逐条模式 ──────────────────────────────────────────────────────
 
     def _per_post(self, posts, user_id, platform, tmpl, db) -> int:
+        # 拉近 30 天已用标题（toutiao_weitt 需要的 recent_titles 占位符）
+        recent_titles_block = self._recent_titles_block(db, user_id, platform, days=30)
+        used_in_this_run: list[str] = []
+
         count = 0
         for post in posts:
             title   = (post.get('translated_title')   or post.get('title')   or '').strip()
@@ -127,8 +132,18 @@ class RewriteEngine:
             if not (title or content):
                 continue
 
+            extra = '\n'.join(f'- {t}' for t in used_in_this_run)
+            rt_full = (recent_titles_block + ('\n' + extra if extra else '')) or '(暂无)'
+            facts_text, angle = rsu_facts.draw_seed()
+
             try:
-                prompt = tmpl.format(title=title, content=content[:4000])
+                prompt = tmpl.format(
+                    title=title,
+                    content=content[:4000],
+                    seed_facts=facts_text,
+                    seed_angle=angle,
+                    recent_titles=rt_full,
+                )
             except KeyError as e:
                 log.warning('[rewrite] per_post 模板缺少占位符: %s', e)
                 continue
@@ -159,6 +174,8 @@ class RewriteEngine:
             )
             log.info('[rewrite] ✓ %s/%s post_id=%s → %s',
                      user_id, platform, post['id'], (new_title or '')[:30])
+            if new_title:
+                used_in_this_run.append(new_title)
             count += 1
         return count
 
@@ -470,6 +487,11 @@ class RewriteEngine:
         log.info('[rewrite] %s/xhs 候选总池=%d 条，分 %d 组每组 %d',
                  user_id, len(total), batch, candidate_pool)
 
+        # 拉近 30 天已用标题，注入 prompt 防同质
+        recent_titles_block = self._recent_titles_block(db, user_id, 'xhs', days=30)
+        # 本轮已产出的标题也注入下一篇，避免连产 N 篇相似
+        used_in_this_run: list[str] = []
+
         count = 0
         already_main: set[int] = set()      # 防同一 post 被重复用作仿写主素材
         for i in range(batch):
@@ -543,8 +565,19 @@ class RewriteEngine:
                 log.warning('[rewrite] %s/xhs 第 %d 组主素材无文字，跳过', user_id, i + 1)
                 continue
 
+            # 拼 recent_titles：近 30 天 DB 数据 + 本轮已生成
+            extra = '\n'.join(f'- {t}' for t in used_in_this_run)
+            rt_full = (recent_titles_block + ('\n' + extra if extra else '')) or '(暂无)'
+
+            facts_text, angle = rsu_facts.draw_seed()
             try:
-                prompt = tmpl.format(title=title, content=content[:4000])
+                prompt = tmpl.format(
+                    title=title,
+                    content=content[:4000],
+                    seed_facts=facts_text,
+                    seed_angle=angle,
+                    recent_titles=rt_full,
+                )
             except KeyError as e:
                 log.warning('[rewrite] xhs 模板缺少占位符: %s', e)
                 continue
@@ -570,6 +603,8 @@ class RewriteEngine:
                 user_id, i + 1, batch, main_post['id'], len(selected_imgs[:2]),
                 (new_title or '')[:30],
             )
+            if new_title:
+                used_in_this_run.append(new_title)
             count += 1
 
         return count
