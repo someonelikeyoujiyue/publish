@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { canWrite, isAdmin } from '@/lib/auth'
+import { canWrite } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { Platform, DraftStatus } from '@/lib/types'
@@ -21,7 +21,8 @@ export function DraftList({ platform }: { platform: Platform }) {
   // 仿写按钮对 admin + editor 都可见；user 只读
   const canRewrite = canWrite()
   // 删除（目前只 xhs 平台支持，admin only）
-  const canDelete = platform === 'xhs' && isAdmin()
+  // xhs 草稿删除：editor / admin 都可
+  const canDelete = platform === 'xhs' && canWrite()
   const [confirmDel, setConfirmDel] = useState<{ id: number; title: string } | null>(null)
   const delMut = useMutation({
     mutationFn: (draftId: number) => api.xhsDeleteDraft(userId, draftId),

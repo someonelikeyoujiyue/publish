@@ -19,7 +19,7 @@ from ...rewrite import RewriteEngine
 from ... import rsu_facts
 from ...xhs import XhsPublisher
 from ._helpers import parse_images
-from .auth import require_admin, require_editor
+from .auth import require_editor
 
 log = logging.getLogger('publisher_hub.api.xhs')
 router = APIRouter()
@@ -164,9 +164,9 @@ def update_draft(
 
 @router.delete('/users/{user_id}/xhs/drafts/{draft_id}', status_code=200)
 def delete_draft(
-    user_id: str, draft_id: int, request: Request, _=Depends(require_admin),
+    user_id: str, draft_id: int, request: Request, _=Depends(require_editor),
 ):
-    """删除 xhs 草稿（admin only）+ 清理 draft-uploads/<id>/ 目录。"""
+    """删除 xhs 草稿（editor / admin 都行）+ 清理 draft-uploads/<id>/ 目录。"""
     db = request.app.state.db
     draft = db.get_draft(draft_id)
     if not draft or draft['user_id'] != user_id or draft['platform'] != PLATFORM:

@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { canWrite, isAdmin } from '@/lib/auth'
+import { canWrite } from '@/lib/auth'
 import { Btn, Card, Badge, Empty, Flash } from '@/components/ui'
 
 const STATUS_LABEL = {
@@ -29,8 +29,9 @@ const STATUS_LABEL = {
 export function Video() {
   const { userId = '' } = useParams()
   const qc = useQueryClient()
-  const admin = isAdmin()
   const editor = canWrite()
+  // 视频任务删除：editor / admin 都可（user 不行）
+  const canDelete = editor
 
   // 表单状态
   const [topic, setTopic]           = useState('')
@@ -387,7 +388,7 @@ export function Video() {
                       ⬇ 下载
                     </a>
                   )}
-                  {admin && (
+                  {canDelete && (
                     <button
                       onClick={() => {
                         if (confirm(`确认删除任务 #${j.id} 及视频文件？`)) del.mutate(j.id)

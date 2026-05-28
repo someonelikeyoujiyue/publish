@@ -32,7 +32,7 @@ from ...video_gen.pipeline import (
     default_video_jobs_dir,
 )
 from ...video_gen.tts import VOICE_PRESETS, DEFAULT_VOICE_KEY
-from .auth import require_admin, require_editor, require_login
+from .auth import require_editor, require_login
 
 log = logging.getLogger('publisher_hub.api.video')
 router = APIRouter()
@@ -320,7 +320,7 @@ async def generate_video(
 
 @router.delete('/users/{user_id}/video/jobs/{job_id}', status_code=200)
 def delete_job(
-    user_id: str, job_id: int, request: Request, _=Depends(require_admin),
+    user_id: str, job_id: int, request: Request, _=Depends(require_editor),
 ):
     config = request.app.state.config
     db     = request.app.state.db
